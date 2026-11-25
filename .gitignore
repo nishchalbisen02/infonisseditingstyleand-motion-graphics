@@ -8,3 +8,4 @@ __pycache__/
 
 # Owner photos/footage for edits: the repo is public, never commit them.
 motion-graphics/projects/*/assets/
+motion-graphics/projects/*/build/

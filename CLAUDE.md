@@ -49,6 +49,11 @@ node motion-graphics/render.js motion-graphics/templates/<name>.html -p key=valu
 - Use `--preview t1,t2,...` to get a contact sheet before the full render.
 - Speech-to-text models can't be downloaded here (Hugging Face is blocked), so captions need the
   owner to type the words, or the environment's network to allow the model host.
+- `projects/launch-intro/`: photo-only motion graphics launch reel (no footage). `prep.py` cuts out
+  backgrounds with rembg (models come from GitHub releases, which are reachable; isnet-general-use, and
+  birefnet-portrait for B&W photos on dark backgrounds; load only one BiRefNet session at a time or the
+  container runs out of memory). `music.py` synthesises an original 120 BPM track (no licensed music).
+  `intro.py` renders scenes locked to that beat grid. Photos go in `assets/src/` (git-ignored).
 
 ### Writing a new template
 
