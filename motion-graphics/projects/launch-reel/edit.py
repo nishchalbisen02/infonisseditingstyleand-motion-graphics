@@ -7,7 +7,7 @@
 What it does (audio is kept exactly in sync, nothing is retimed):
   - vertical crop that follows the face in each shot
   - punch-in zoom cuts in the speech pauses, plus an impact zoom on the shot change
-  - photo montage (7.0-11.3s): the owner's photos slam in as collage cards with chalk doodles,
+  - photo montage (6.6-11.3s): the owner's 6 photos slam in as collage cards with chalk doodles,
     over the voice, on alternating orange/black plates (photos in ./assets, git-ignored)
   - pull-back on the smoke so the full "Let'smakesomenoise" end card fits the vertical frame
   - light grade (contrast, saturation, vignette), fine film grain, mild sharpening
@@ -48,7 +48,7 @@ ZOOM = [
     (12.48, 13.66, 1.10, 1.13),
     (13.66, 99.0, 1.28, 1.34),
 ]
-MONTAGE_START, MONTAGE_END = 7.0, 11.30  # photo montage over the voice; ends in a speech pause
+MONTAGE_START, MONTAGE_END = 6.6, 11.30  # photo montage over the voice; ends in a speech pause
 IMPACTS = [  # time, duration, starting zoom: a punch on the shot change and when the face comes back
     (CUT, 0.40, 1.30),
     (MONTAGE_END, 0.35, 1.30),
@@ -76,13 +76,14 @@ ORANGE, BLACK = (24, 80, 214), (16, 14, 14)  # BGR plates; orange sampled from t
 CARD_W, CARD_CY, CARD_BORDER = 900, 900, 14
 CARDS = [
     # file, plate colour, resting tilt (deg), chalk doodles: (kind, x, y, angle deg, size)
-    ("1-topdown.png", ORANGE, -3.0, [("burst", 935, 250, -45, 1.0), ("squiggle", 540, 1590, -3, 1.0)]),
-    ("2-niss-orange.png", BLACK, 2.5, [("bolt", 905, 250, 12, 1.2), ("star", 150, 1480, 0, 1.0),
-                                       ("star", 228, 1565, 0, 0.6)]),
-    ("3-filmstrip.png", ORANGE, -2.0, [("burst", 930, 360, -40, 1.0), ("squiggle", 560, 1470, 2, 1.0)]),
-    ("4-hand.jpg", BLACK, 3.0, [("star", 160, 225, 0, 1.1), ("bolt", 175, 1560, -12, 0.9),
-                                ("star", 925, 1585, 0, 0.9)]),
-    ("5-boxface.png", ORANGE, -2.5, [("burst", 935, 250, -40, 0.9), ("burst", 150, 1560, 135, 1.0)]),
+    ("topdown.png", ORANGE, -3.0, [("burst", 935, 250, -45, 1.0), ("squiggle", 540, 1590, -3, 1.0)]),
+    ("greenhat.png", BLACK, 2.5, [("bolt", 935, 235, 12, 1.0), ("star", 150, 1575, 0, 1.0),
+                                  ("star", 228, 1650, 0, 0.6)]),
+    ("filmstrip.png", ORANGE, -2.0, [("burst", 930, 360, -40, 1.0), ("squiggle", 560, 1470, 2, 1.0)]),
+    ("hand.jpg", BLACK, 3.0, [("star", 935, 230, 0, 1.1), ("bolt", 170, 1570, -12, 0.9)]),
+    ("boxface.png", ORANGE, -2.5, [("burst", 935, 250, -40, 0.9), ("burst", 150, 1560, 135, 1.0)]),
+    ("niss-orange.png", BLACK, 2.5, [("bolt", 905, 250, 12, 1.2), ("star", 150, 1480, 0, 1.0),
+                                     ("star", 228, 1565, 0, 0.6)]),
 ]
 
 DOODLE_SHAPES = {
