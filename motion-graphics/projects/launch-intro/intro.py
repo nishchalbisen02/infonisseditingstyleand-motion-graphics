@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Launch intro: a crunchy collage motion-graphics reel from the owner's cut-out photos + logo.
+"""Launch intro v2: a scroll-stopping, crunchy collage motion-graphics reel from the owner's photos + logo.
 
   python3 motion-graphics/projects/launch-intro/music.py motion-graphics/projects/launch-intro/build/music.wav
   python3 motion-graphics/projects/launch-intro/intro.py --out launch-intro.mp4
   python3 motion-graphics/projects/launch-intro/intro.py --preview 0.6,2.2,5.6,9,12.3 --out sheet.png
 
 Needs assets/ready/ from prep.py (owner photos: git-ignored, re-upload per session) and the music wav.
-1080x1920, 30 fps, 16 s, locked to a 120 BPM grid (one beat = 15 frames). Graphics "boil" at 10 fps
-(outlines, doodles and letters re-jitter every 3 frames) for the stop-motion / crunchy look.
+1080x1920, 30 fps, 16 s on the 120 BPM grid in timeline.py (one beat = 15 frames).
+
+  0-2s   hook: SOUND ON + volume slider climbing while the music is muffled; silence; DROP
+  2-4s   drop: shockwave + confetti, LET'S MAKE / SOME NOISE, heads swapped by whip pans
+  4-6s   LET'S / MAKE / SOME / NOISE, joined by zoom-through transitions
+  6-8s   EDITS. / DESIGN. / MOTION. (whip pans), 16th-note photo stutter
+  8-12s  collage drops on 8ths with parallax + equalizer bars; camera dives into the poster's monitor
+  12-16s CRT logo reveal, handle typed on tape, heads bouncing, final hit
+
+Everything pulses with the music's bass, the equalizer reads its real spectrum, and graphics boil at
+10 fps (outlines, doodles and letters re-jitter every 3 frames) for the stop-motion look.
 """
 import argparse
 import math
@@ -26,10 +35,11 @@ FONTS = os.path.join(HERE, "..", "..", "assets", "fonts")
 ANTON = os.path.join(FONTS, "Anton-Regular.ttf")
 MARKER = os.path.join(FONTS, "PermanentMarker-Regular.ttf")
 MUSIC = os.path.join(HERE, "build", "music.wav")
+sys.path.insert(0, HERE)
+from timeline import (BEAT, DROP, FINAL_HIT, GAPS, LENGTH, LOGO, MINI_HIT, MONITOR, RAPID,  # noqa: E402
+                      WHIPS, ZOOMS)
 
 W, H, FPS = 1080, 1920, 30
-BEAT = 0.5
-LENGTH = 16.0
 BOIL_FPS = 10
 HANDLE = "@letssmakesomenoise"
 
@@ -318,9 +328,50 @@ def doodle(canvas, kind, x, y, t, ang=0.0, size=1.5, progress=1.0, color=WHITE, 
 
 
 # ----------------------------------------------------------------------------------------------
+# audio analysis (drives the pulses and the equalizer bars)
+class Audio:
+    def __init__(self, path, bands=14):
+        from scipy.io import wavfile
+        from scipy.signal import butter, sosfilt
+
+        sr, x = wavfile.read(path)
+        x = x.astype(np.float32).mean(axis=1) / 32768
+        n = int(LENGTH * FPS)
+        hop = sr // FPS
+        lo = sosfilt(butter(4, 150, btype="lowpass", fs=sr, output="sos"), x)
+        rms = np.array([np.sqrt(np.mean(lo[max(i * hop - hop, 0):i * hop + hop] ** 2) + 1e-12) for i in range(n)])
+        rms /= np.percentile(rms, 97) + 1e-9
+        env = np.zeros(n)
+        for i in range(n):  # instant attack, fast release
+            env[i] = max(min(rms[i], 1.2), env[i - 1] * 0.72 if i else 0)
+        self.bass = np.clip(env, 0, 1.2)
+        edges = np.geomspace(50, 9000, bands + 1)
+        win = 2048
+        freqs = np.fft.rfftfreq(win, 1 / sr)
+        window = np.hanning(win)
+        spec = np.zeros((n, bands))
+        for i in range(n):
+            seg = x[i * hop:i * hop + win]
+            if seg.size < win:
+                seg = np.pad(seg, (0, win - seg.size))
+            mag = np.abs(np.fft.rfft(seg * window))
+            for b in range(bands):
+                m = (freqs >= edges[b]) & (freqs < edges[b + 1])
+                spec[i, b] = 20 * np.log10(mag[m].mean() + 1e-9)
+        spec = (spec - spec.max(axis=0) + 42) / 42  # each band: its loudest frame -> 1, -42 dB -> 0
+        self.bands = np.clip(spec, 0, 1)
+
+    def at(self, t):
+        return float(self.bass[min(int(t * FPS), len(self.bass) - 1)])
+
+    def bands_at(self, t):
+        return self.bands[min(int(t * FPS), len(self.bands) - 1)]
+
+
+# ----------------------------------------------------------------------------------------------
 # assets
 class Assets:
-    def __init__(self):
+    def __init__(self, music):
         cut = {
             "greenhat": load("greenhat.png", 1150),
             "niss": load("niss-orange.png", 1150),
@@ -330,10 +381,9 @@ class Assets:
             "hand": load("hand.png", 1200),
         }
         self.stickers = {k: boil_set(v, r=18) for k, v in cut.items()}
-        self.ink = load("poster-ink.png", 1150)
-        self.ink_orange = self.ink.tinted(BLACK)
-        logo = load("logo-white.png")
-        self.logo = logo
+        self.ink = load("poster-ink.png", 1150).tinted(BLACK)
+        self.logo = load("logo-white.png")
+        self.audio = Audio(music)
         self.plates = {
             "black": make_plate(BLACK, 1, dot_color=(40, 36, 36)),
             "orange": make_plate(ORANGE, 2),
@@ -342,16 +392,22 @@ class Assets:
             "red": make_plate(RED, 5),
             "blue": make_plate(BLUE, 6),
         }
-        # countdown digits and words
-        self.digits = {d: boil_set(text_sprite(d, ANTON, 1000, c), r=16)
-                       for d, c in (("3", ORANGE), ("2", CREAM), ("1", YELLOW))}
+        L = lambda txt, size, fill, stroke=12: letters(txt, ANTON, size, fill, stroke=stroke, stroke_fill=BLACK)
         self.words = {
+            "SOUND ON": L("SOUND ON", 205, CREAM, 12),
+            "LET'S MAKE": L("LET'S MAKE", 215, CREAM),
+            "SOME NOISE": L("SOME NOISE", 215, CREAM),
             "LET'S": letters("LET'S", ANTON, 520, BLACK),
             "MAKE": letters("MAKE", ANTON, 560, CREAM),
-            "SOME": letters("SOME", ANTON, 560, RED, stroke=10, stroke_fill=BLACK),
-            "NOISE": letters("NOISE", ANTON, 470, WHITE, stroke=16, stroke_fill=BLACK),
+            "SOME": L("SOME", 560, RED, 10),
+            "NOISE": L("NOISE", 470, WHITE, 16),
+            "EDITS.": L("EDITS.", 330, YELLOW, 14),
+            "DESIGN.": L("DESIGN.", 300, RED, 14),
+            "MOTION.": L("MOTION.", 290, CREAM, 14),
         }
-        # scrolling ribbon (marquee band)
+        self.max_tag = boil_set(text_sprite("MAX!", MARKER, 120, YELLOW, stroke=6, stroke_fill=BLACK), r=10, color=BLACK)
+        self.vol_label = text_sprite("VOLUME", ANTON, 58, CREAM, stroke=5, stroke_fill=BLACK)
+        self.pct = {}
         self.ribbons = {}
         for name, band, ink in (("black", BLACK, CREAM), ("cream", CREAM, BLACK)):
             txt = text_sprite("LET'S MAKE SOME NOISE  /  ", ANTON, 78, ink)
@@ -375,11 +431,18 @@ class Assets:
         rr = np.sqrt(((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2) / math.sqrt(2)
         v = (1.0 - 0.28 * np.clip((rr - 0.4) / 0.6, 0, 1) ** 1.5).astype(np.float32)
         self.vignette = v[:, :, None]
+        scan = np.ones((H, 1, 1), np.float32)
+        scan[::3] = 0.72  # CRT scanlines
+        self.scanlines = scan
 
     def st(self, name, t):
-        """Boiling sticker variant for this 10 fps step."""
         s = self.stickers[name]
         return s[boil_step(t) % len(s)]
+
+    def percent(self, v):
+        if v not in self.pct:
+            self.pct[v] = text_sprite(f"{v}%", ANTON, 64, YELLOW if v >= 100 else CREAM, stroke=5, stroke_fill=BLACK)
+        return self.pct[v]
 
 
 def ribbon(canvas, assets, kind, y, angle, t, speed=520):
@@ -400,52 +463,136 @@ def word(canvas, letters_, x, y, t, scale=1.0, rot=0.0, amp=6, shadow=None, key=
 
 
 # ----------------------------------------------------------------------------------------------
+# hit effects
+def rings(c, cx, cy, t0, t, color=WHITE, n=3, life=0.55, rmax=1300, thick=28):
+    """Shockwave: concentric rings racing outward."""
+    for k in range(n):
+        u = t - t0 - k * 0.07
+        if 0 <= u < life:
+            r = 60 + rmax * ease_out(u / life)
+            th = max(int(thick * (1 - u / life)), 2)
+            cv2.circle(c, (int(cx), int(cy)), int(r), color, th)
+
+
+def particles(c, cx, cy, t0, t, seed, n=34, life=0.85, speed=(800, 2300),
+              colors=(WHITE, YELLOW, CREAM, RED, BLUE)):
+    """Confetti / halftone dots / chalk sparks bursting out with drag and gravity."""
+    u = t - t0
+    if u < 0 or u > life:
+        return
+    r = np.random.default_rng(seed)
+    for _ in range(n):
+        ang = r.uniform(0, 2 * math.pi)
+        sp = r.uniform(*speed)
+        size = r.uniform(9, 24) * (1 - u / life) + 2
+        kind = int(r.integers(0, 3))
+        col = colors[int(r.integers(len(colors)))]
+        spin = r.uniform(-14, 14)
+        dist = sp * (1 - math.exp(-u * 4.5)) / 4.5
+        x = cx + math.cos(ang) * dist
+        y = cy + math.sin(ang) * dist + 700 * u * u
+        if kind == 0:
+            cv2.circle(c, (int(x), int(y)), int(size), col, -1)
+        elif kind == 1:
+            a = spin * u
+            pts = np.array([[x + size * math.cos(a + q * math.pi / 2), y + size * 0.6 * math.sin(a + q * math.pi / 2)]
+                            for q in range(4)], np.int32)
+            cv2.fillPoly(c, [pts], col)
+        else:
+            s2 = int(size * 1.3)
+            cv2.line(c, (int(x) - s2, int(y)), (int(x) + s2, int(y)), col, 4)
+            cv2.line(c, (int(x), int(y) - s2), (int(x), int(y) + s2), col, 4)
+
+
+def eq_bars(c, A, t, y_base=H, height=300, alpha=1.0):
+    """Equalizer bars driven by the real music spectrum."""
+    b = A.audio.bands_at(t)
+    n = len(b)
+    margin, gap = 40, 12
+    bw = (W - 2 * margin - gap * (n - 1)) / n
+    for i, v in enumerate(b):
+        h = int(24 + height * v)
+        x0 = int(margin + i * (bw + gap))
+        col = YELLOW if i % 2 else CREAM
+        cv2.rectangle(c, (x0, y_base - h), (int(x0 + bw), y_base + 10), BLACK, -1)
+        cv2.rectangle(c, (x0 + 5, y_base - h + 5), (int(x0 + bw) - 5, y_base + 10), col, -1)
+
+
+def speaker(c, x, y, t, pulse, size=1.0):
+    s = size
+    body = np.array([[x - 70 * s, y - 32 * s], [x - 30 * s, y - 32 * s], [x + 25 * s, y - 78 * s],
+                     [x + 25 * s, y + 78 * s], [x - 30 * s, y + 32 * s], [x - 70 * s, y + 32 * s]], np.int32)
+    cv2.fillPoly(c, [body], BLACK)
+    cv2.polylines(c, [body], True, BLACK, 14)
+    inner = np.array([[x - 62 * s, y - 24 * s], [x - 27 * s, y - 24 * s], [x + 17 * s, y - 62 * s],
+                      [x + 17 * s, y + 62 * s], [x - 27 * s, y + 24 * s], [x - 62 * s, y + 24 * s]], np.int32)
+    cv2.fillPoly(c, [inner], CREAM)
+    waves = 1 + int(round(pulse * 2.2))
+    for k in range(min(waves, 3)):
+        r = int((62 + 38 * k) * s)
+        cv2.ellipse(c, (int(x + 30 * s), int(y)), (r, r), 0, -48, 48, BLACK, 20)
+        cv2.ellipse(c, (int(x + 30 * s), int(y)), (r, r), 0, -48, 48, CREAM, 10)
+
+
+def slider(c, A, t, value, x0=170, x1=910, y=1560):
+    """Volume slider sticker."""
+    cv2.rectangle(c, (x0 - 34, y - 112), (x1 + 34, y + 54), BLACK, -1)
+    cv2.rectangle(c, (x0 - 26, y - 104), (x1 + 26, y + 46), (40, 36, 36), -1)
+    draw(c, A.vol_label, x0 + A.vol_label.w / 2, y - 62, 1.0)
+    pct = int(round(value * 100))
+    sp = A.percent(pct)
+    draw(c, sp, x1 - sp.w / 2, y - 62, 1.0)
+    cv2.rectangle(c, (x0, y - 16), (x1, y + 16), (70, 66, 66), -1)
+    xf = int(x0 + (x1 - x0) * value)
+    fill = RED if value >= 0.9 else ORANGE
+    cv2.rectangle(c, (x0, y - 16), (xf, y + 16), fill, -1)
+    cv2.circle(c, (xf, y), 38, BLACK, -1)
+    cv2.circle(c, (xf, y), 30, CREAM, -1)
+
+
+# ----------------------------------------------------------------------------------------------
 # scenes (t in seconds; beats every 0.5 s)
-def scene_countdown(c, A, t):
-    c[:] = A.plates["black"]
-    doodle(c, "squiggle", W / 2, 980, t, size=2.3, progress=t / 0.45, key="intro")
-    items = [(0.5, "3", "black", "greenhat", (820, 1620, -12)),
-             (1.0, "2", "orange", "niss", (250, 1620, 10)),
-             (1.5, "1", "green", "topdown", (840, 1600, -6))]
-    for t0, d, plate, who, (hx, hy, hr) in items:
-        if t0 <= t < t0 + 0.5:
-            u = t - t0
-            c[:] = A.plates[plate]
-            doodle(c, "squiggle", W / 2, 1500, t, size=2.0, key="u" + d)
-            peek = ease_out(u / 0.16)
-            draw(c, A.st(who, t), hx, hy + (1 - peek) * 700, 0.52, hr, shadow=(16, 20, BLACK, 0.5))
-            s = slam(u, 0.5)
-            dig = A.digits[d][boil_step(t) % 3]
-            draw(c, dig, W / 2 + jitter(t, d, 5)[0], 820, 0.95 * s, -4 if d == "2" else 4,
-                 shadow=(18, 24, BLACK, 0.6))
-            doodle(c, "burst", 860, 300, t, -45, 1.6, (u - 0.05) / 0.15, key=d)
-            doodle(c, "star", 170, 380, t, 0, 1.3, (u - 0.1) / 0.15, key=d)
+def scene_hook(c, A, t):
+    """SOUND ON: side-eye face, volume slider climbing, music muffled until the drop."""
+    c[:] = A.plates["green"]
+    p = A.audio.at(t)
+    sunburst(c, (40, 58, 22), t * 0.25, opacity=0.5, cy=1180)
+    s = 0.76 + 0.1 * ease_in_out(t / 1.875) + 0.025 * p
+    jx, jy = jitter(t, "hook", 4)
+    draw(c, A.st("greenhat", t), W / 2 + jx, 1010 + jy, s, -3, shadow=(20, 26, BLACK, 0.5))
+    word(c, A.words["SOUND ON"], W / 2 + 75, 330, t, slam(t, 0.35) or 1.0, -3, amp=5,
+         shadow=(10, 14, BLACK, 0.8), key="sound")
+    speaker(c, 118, 338, t, p, 0.95)
+    value = 0.06 + 0.94 * ease_in(t / 1.75) if t < 1.75 else 1.0
+    slider(c, A, t, value, y=1600)
+    if t >= 1.75:
+        draw(c, A.max_tag[boil_step(t) % 3], 860, 1410, slam(t - 1.75, 0.6, 0.06), 10, shadow=(8, 10, BLACK, 0.6))
 
 
-DROP = [("greenhat", "orange", "black", -5), ("niss", "green", "cream", 5),
-        ("boxface", "cream", "black", -4), ("filmstrip", "red", "black", 4)]
+DROP_HEADS = [("niss", "orange", DARK_ORANGE), ("boxface", "red", (70, 30, 170)),
+              ("filmstrip", "blue", (150, 90, 45)), ("topdown", "cream", (196, 210, 222))]
 
 
 def scene_drop(c, A, t):
-    k = min(int((t - 2.0) / BEAT), 3)
-    who, plate, rib, rot = DROP[k]
-    u = t - 2.0 - k * BEAT
+    k = min(int((t - DROP) / BEAT), 3)
+    who, plate, burst = DROP_HEADS[k]
     c[:] = A.plates[plate]
-    ribbon(c, A, rib, 1260, -12 if k % 2 == 0 else 10, t)
-    pop = 1.0 + (0.05 * (1 - ease_out((u - 0.25) / 0.1)) if u >= 0.25 else 0)
-    s = slam(u, 0.55) * pop
+    sunburst(c, burst, t * 1.4, opacity=0.6, cy=980)
+    p = A.audio.at(t)
+    s = (slam(t - DROP, 0.6, 0.12) if k == 0 else 1.0) * (1 + 0.07 * p)
     jx, jy = jitter(t, "drop", 4)
-    draw(c, A.st(who, t), W / 2 + jx, 900 + jy, s, rot, shadow=(20, 26, BLACK, 0.55))
-    doodle(c, "burst", 900, 330, t, -45, 1.7, (u - 0.04) / 0.14, key=who)
-    doodle(c, "bolt", 160, 520, t, -15, 1.5, (u - 0.08) / 0.14, color=YELLOW, key=who)
-    doodle(c, "star", 190, 1500, t, 0, 1.3, (u - 0.12) / 0.14, key=who)
-    doodle(c, "star", 900, 1560, t, 0, 0.9, (u - 0.16) / 0.14, key=who)
+    draw(c, A.st(who, t), W / 2 + jx, 990 + jy, 0.95 * s, -4 if k % 2 else 4, shadow=(22, 28, BLACK, 0.55))
+    rings(c, W / 2, 990, DROP, t, WHITE)
+    particles(c, W / 2, 990, DROP, t, seed=1)
+    ts = (slam(t - DROP, 0.5, 0.1) or 1.0) * (1 + 0.04 * p)
+    word(c, A.words["LET'S MAKE"], W / 2, 250, t, ts, -3, amp=5, shadow=(10, 14, BLACK, 0.85), key="lm")
+    word(c, A.words["SOME NOISE"], W / 2, 1690, t, ts, -3, amp=5, shadow=(10, 14, BLACK, 0.85), key="sn")
 
 
 def scene_words(c, A, t):
     k = min(int((t - 4.0) / BEAT), 3)
     u = t - 4.0 - k * BEAT
-    s = slam(u, 0.4)
+    s = slam(u, 0.3) * (1 + 0.05 * A.audio.at(t))
     if k == 0:
         c[:] = A.plates["orange"]
         word(c, A.words["LET'S"], W / 2, 700, t, 0.9 * s, -5, key="lets")
@@ -462,11 +609,12 @@ def scene_words(c, A, t):
         c[:] = A.plates["cream"]
         word(c, A.words["SOME"], W / 2, 640, t, 0.88 * s, -3, shadow=(14, 18, BLACK, 0.9), key="some")
         iu = ease_out(u / 0.2)
-        draw(c, A.ink_orange, W / 2, 1420 + (1 - iu) * 600, 0.78, 0)
+        draw(c, A.ink, W / 2, 1420 + (1 - iu) * 600, 0.78, 0)
         doodle(c, "burst", 930, 300, t, -45, 1.6, (u - 0.05) / 0.14, color=BLACK, key="some")
     else:
         c[:] = A.plates["orange"]
-        sunburst(c, DARK_ORANGE, t * 0.8, opacity=0.55)
+        sunburst(c, DARK_ORANGE, t * 1.6, opacity=0.6, cy=930)
+        rings(c, W / 2, 930, 5.5, t, CREAM, life=0.45)
         heads = [("greenhat", 230, 400, -12), ("niss", 860, 420, 12), ("boxface", 230, 1480, 8),
                  ("filmstrip", 860, 1500, -8)]
         for i, (who, hx, hy, hr) in enumerate(heads):
@@ -474,92 +622,119 @@ def scene_words(c, A, t):
             if hs:
                 jx, jy = jitter(t, who, 8)
                 draw(c, A.st(who, t), hx + jx, hy + jy, 0.4 * hs, hr, shadow=(12, 16, BLACK, 0.5))
+        particles(c, W / 2, 930, 5.5, t, seed=2, n=40)
         word(c, A.words["NOISE"], W / 2, 930, t, 0.94 * s, -6, amp=14, shadow=(14, 18, RED, 1.0), key="noise")
-        doodle(c, "burst", 120, 820, t, 180, 1.6, (u - 0.06) / 0.12, key="noise")
-        doodle(c, "burst", 960, 1040, t, 0, 1.6, (u - 0.06) / 0.12, key="noise")
 
 
-RAPID = [("greenhat", "red"), ("niss", "black"), ("boxface", "orange"), ("filmstrip", "green"),
-         ("topdown", "cream"), ("hand", "blue"), ("greenhat", "orange"), ("niss", "black")]
+WHO = [("EDITS.", "filmstrip", "black", YELLOW), ("DESIGN.", "boxface", "cream", RED),
+       ("MOTION.", "hand", "orange", CREAM)]
+STUTTER = [("greenhat", "red"), ("niss", "black"), ("boxface", "orange"), ("filmstrip", "green")]
 
 
-def scene_hand(c, A, t):
-    if t < 7.0:
-        u = t - 6.0
-        c[:] = A.plates["cream"]
-        sunburst(c, (205, 218, 228), -t * 0.6, opacity=0.6)
-        ribbon(c, A, "black", 520, 8, t, speed=-600)
-        a_in = ease_out(u / 0.3)
-        out = ease_in((u - 0.72) / 0.28)
-        x = 700 - 140 * a_in
-        y = 2500 - 1450 * a_in - 2600 * out
-        rot = -32 + 24 * a_in + 6 * math.sin(u * 9) * (1 - out)
-        sc = 1.9 - 0.45 * a_in
-        sp = A.st("hand", t)
-        if out > 0:  # motion-smear ghosts on the whip out
-            for g in range(1, 4):
-                draw(c, sp, x, y + 160 * g * out, sc, rot, alpha=0.18)
-        draw(c, sp, x, y, sc, rot, shadow=(24, 30, BLACK, 0.45))
-        doodle(c, "arrow", 230, 1500, t, -30, 1.8, (u - 0.2) / 0.2, color=BLACK, key="hand")
-        doodle(c, "star", 880, 380, t, 0, 1.4, (u - 0.25) / 0.15, color=BLACK, key="hand")
-    else:
-        k = min(int((t - 7.0) / 0.125), 7)
-        u = t - 7.0 - k * 0.125
-        who, plate = RAPID[k]
+def scene_who(c, A, t):
+    if t >= RAPID[0]:
+        k = min(int((t - RAPID[0]) / 0.125), 3)
+        u = t - RAPID[0] - k * 0.125
+        who, plate = STUTTER[k]
         c[:] = A.plates[plate]
-        s = (0.75 + 0.06 * k) * slam(u, 0.3, 0.06)
-        draw(c, A.st(who, t), W / 2, 930, s, 8 if k % 2 else -8, shadow=(18, 22, BLACK, 0.55))
+        s = (0.8 + 0.08 * k) * slam(u, 0.3, 0.06)
+        draw(c, A.st(who, t), W / 2, 960, s, 8 if k % 2 else -8, shadow=(18, 22, BLACK, 0.55))
+        rings(c, W / 2, 960, RAPID[0] + k * 0.125, t, WHITE, n=1, life=0.12, rmax=700)
+        return
+    k = min(int((t - 6.0) / BEAT), 2)
+    u = t - 6.0 - k * BEAT
+    txt, who, plate, _ = WHO[k]
+    c[:] = A.plates[plate]
+    p = A.audio.at(t)
+    rise = ease_out(u / 0.22)
+    rot = 4 * math.sin(u * 8) if who == "hand" else (-3 if k % 2 else 3)
+    draw(c, A.st(who, t), 560, 1220 + (1 - rise) * 600, 0.9 * (1 + 0.04 * p), rot, shadow=(20, 26, BLACK, 0.5))
+    # letters slam in one after another
+    lets = A.words[txt]
+    for i, (sp, dx) in enumerate(lets):
+        ls = slam(u - 0.03 * i, 0.7, 0.08)
+        if ls is None:
+            continue
+        jx, jy = jitter(t, (txt, i), 5)
+        draw(c, sp, W / 2 + dx + jx, 420 + jy, ls, -4 + jitter(t, (txt, i, "r"), 3)[0], shadow=(10, 14, BLACK, 0.8))
+    doodle(c, "arrow", 230, 700, t, 60, 1.4, (u - 0.12) / 0.15, color=BLACK if plate == "cream" else WHITE, key=txt)
+    doodle(c, "star", 900, 720, t, 0, 1.2, (u - 0.16) / 0.12, color=YELLOW, key=txt)
 
 
 COLLAGE = [
-    # beat time, what, x, y, scale, rot
-    (8.0, "ink", 560, 1160, 0.95, 0),
-    (8.5, "greenhat", 255, 500, 0.52, -10),
-    (9.0, "niss", 835, 540, 0.52, 9),
-    (9.5, "boxface", 215, 1130, 0.44, -6),
-    (10.0, "filmstrip", 875, 1150, 0.44, 7),
-    (10.5, "topdown", 560, 1540, 0.5, -3),
-    (11.0, "hand", 930, 1700, 0.62, -26),
-    (11.5, "niss_tag", 560, 270, 1.0, -8),
+    # landing time, what, x, y, scale, rot, depth (parallax)
+    (8.00, "ink", 560, 1160, 0.95, 0, 0.5),
+    (8.25, "greenhat", 255, 500, 0.52, -10, 1.2),
+    (8.50, "niss", 835, 540, 0.52, 9, 1.2),
+    (8.75, "boxface", 215, 1130, 0.44, -6, 1.0),
+    (9.00, "filmstrip", 875, 1150, 0.44, 7, 1.0),
+    (9.25, "topdown", 560, 1540, 0.5, -3, 1.4),
+    (9.50, "hand", 930, 1700, 0.62, -26, 1.6),
+    (9.75, "niss_tag", 560, 270, 1.0, -8, 1.3),
 ]
+MONITOR_OFFSET = (212, 97)  # the poster's computer screen, relative to the ink sprite centre (scale 1)
+MONITOR_PT = [W / 2, H / 2]
+EXPLODE = (MONITOR[0] - 0.15, 0.4)  # stickers blast off the page right before the dive (start, length)
 
 
 def scene_collage(c, A, t):
     c[:] = A.plates["orange"]
-    for i, (t0, what, x, y, sc, rot) in enumerate(COLLAGE):
-        if i == 1:
-            ribbon(c, A, "black", 1420, 9, t)  # over the ink drawing, under the stickers
-        s = slam(t - t0, 0.5)
+    p = A.audio.at(t)
+    camx = 36 * math.sin((t - 8.0) * 0.9)
+    camy = 60 * math.sin((t - 8.0) * 1.3)
+    blast = ease_in((t - EXPLODE[0]) / EXPLODE[1])
+    for i, (t0, what, x, y, sc, rot, depth) in enumerate(COLLAGE):
+        if i == 1 and blast < 1:
+            ribbon(c, A, "black", 1420 + camy * 0.8 + 900 * blast, 9 + 20 * blast, t)
+        s = slam(t - t0, 0.5, 0.1)
         if s is None:
             continue
+        px, py = x + camx * depth, y + camy * depth
+        if what != "ink" and blast > 0:  # fly outward from the centre, spinning
+            if blast >= 1:
+                continue
+            dx, dy = px - W / 2, py - H / 2
+            ln = math.hypot(dx, dy) or 1
+            px += dx / ln * 1500 * blast
+            py += dy / ln * 1500 * blast
+            s *= 1 + 0.7 * blast
+            rot += (40 if i % 2 else -40) * blast
         jx, jy = jitter(t, what, 4)
         jr = jitter(t, (what, "r"), 1.2)[0]
+        pulse = 1 + 0.035 * p * depth
         if what == "ink":
-            draw(c, A.ink_orange, x + jx, y + jy, sc * s, rot + jr)
+            draw(c, A.ink, px + jx, py + jy, sc * s, rot + jr)
+            MONITOR_PT[0] = px + MONITOR_OFFSET[0] * sc
+            MONITOR_PT[1] = py + MONITOR_OFFSET[1] * sc
         elif what == "niss_tag":
-            draw(c, A.niss_tag[boil_step(t) % 3], x + jx, y + jy, sc * s, rot + jr, shadow=(10, 12, BLACK, 0.5))
-            doodle(c, "crown", x + 170, y - 90, t, 14, 1.0, (t - t0 - 0.05) / 0.15, color=YELLOW, key="tag")
+            draw(c, A.niss_tag[boil_step(t) % 3], px + jx, py + jy, sc * s, rot + jr, shadow=(10, 12, BLACK, 0.5))
+            doodle(c, "crown", px + 170, py - 90, t, 14, 1.0, (t - t0 - 0.05) / 0.15, color=YELLOW, key="tag")
         else:
-            draw(c, A.st(what, t), x + jx, y + jy, sc * s, rot + jr, shadow=(16, 20, BLACK, 0.5))
-        p = (t - t0 - 0.03) / 0.14
-        kinds = ("burst", "star", "bolt")
-        doodle(c, kinds[i % 3], x + (150 if x < W / 2 else -150), y - 190, t, -45 if x < W / 2 else -135,
-               1.3, p, color=YELLOW if i % 3 == 2 else WHITE, key=what)
+            draw(c, A.st(what, t), px + jx, py + jy, sc * s * pulse, rot + jr, shadow=(16, 20, BLACK, 0.5))
+        rings(c, px, py, t0, t, CREAM, n=1, life=0.3, rmax=380, thick=16)
+        particles(c, px, py, t0, t, seed=10 + i, n=10, life=0.5, speed=(400, 1100))
+    if blast < 1:
+        eq_bars(c, A, t, y_base=int(H + 320 * blast), height=200)
+    rings(c, W / 2, H / 2, EXPLODE[0], t, WHITE, n=2, life=0.4, rmax=1200)
 
 
 def scene_logo(c, A, t):
     c[:] = A.plates["black"]
-    sunburst(c, (20, 36, 90), t * 0.35, opacity=0.65, cy=760)
-    u = t - 12.0
-    # heads peeking from the bottom edge, bobbing on the beat
+    p = A.audio.at(t)
+    sunburst(c, (20, 36, 90), t * 0.6, opacity=0.65, cy=760)
+    u = t - LOGO
+    for t0, big in ((LOGO, True), (MINI_HIT, False), (FINAL_HIT, True)):
+        rings(c, W / 2, 760, t0, t, YELLOW if big else CREAM, life=0.6 if big else 0.4, rmax=1400 if big else 700)
+        particles(c, W / 2, 760, t0, t, seed=int(t0 * 10), n=46 if big else 18)
     for i, (who, hx, hr) in enumerate((("greenhat", 150, 8), ("niss", 410, -6), ("boxface", 670, 6),
                                         ("filmstrip", 930, -8))):
         t0 = 12.5 + 0.25 * i
         if t >= t0:
             rise = ease_out((t - t0) / 0.2)
-            bob = 26 * (1 - ease_out(((t - 12.0) % BEAT) / 0.25)) if t > 13.5 else 0
-            draw(c, A.st(who, t), hx, 1600 + (1 - rise) * 700 - bob, 0.5, hr, shadow=(12, 16, BLACK, 0.5))
-    s = slam(u, 0.6, 0.14)
+            jump = 120 * math.exp(-(t - MINI_HIT) / 0.15) if t >= MINI_HIT else 0
+            jump += 160 * math.exp(-(t - FINAL_HIT) / 0.18) if t >= FINAL_HIT else 0
+            draw(c, A.st(who, t), hx, 1600 + (1 - rise) * 700 - 34 * p - jump, 0.5, hr, shadow=(12, 16, BLACK, 0.5))
+    s = slam(u, 0.6, 0.14) * (1 + 0.05 * p)
     jx, jy = jitter(t, "logo", 3)
     draw(c, A.logo, W / 2 + jx, 760 + jy, 0.97 * s, -3, shadow=(10, 12, RED, 1.0))
     for kind, x, y, ang, d in (("burst", 110, 600, 200, 0.05), ("burst", 975, 900, 20, 0.08),
@@ -571,35 +746,104 @@ def scene_logo(c, A, t):
         tape_w = A.handle.w + 60
         tape = Sprite(np.full((A.handle.h + 36, tape_w, 3), ORANGE, np.float32),
                       np.ones((A.handle.h + 36, tape_w), np.float32))
-        sub = Sprite(A.handle.rgb[:, : int(A.handle.w * n / len(HANDLE))], A.handle.a[:, : int(A.handle.w * n / len(HANDLE))])
+        cut = int(A.handle.w * n / len(HANDLE))
         ts = slam(tu, 0.25, 0.08)
         draw(c, tape, W / 2, 1000, ts, 2, shadow=(10, 12, BLACK, 0.6))
-        if sub.w > 2:
-            # left-align the typed part inside the tape
-            off = (sub.w - A.handle.w) / 2
+        if cut > 2:
+            sub = Sprite(A.handle.rgb[:, :cut], A.handle.a[:, :cut])
+            off = (sub.w - A.handle.w) / 2  # left-align the typed part inside the tape
             c2, s2 = math.cos(math.radians(-2)), math.sin(math.radians(-2))
             draw(c, sub, W / 2 + off * c2 * ts, 1000 + off * s2 * ts, ts, 2)
     if t >= 13.5:
         draw(c, A.follow, 300, 905, slam(t - 13.5, 0.4), -10)
+        doodle(c, "arrow", 150, 1000, t, 20, 0.9, (t - 13.55) / 0.15, color=YELLOW, key="follow")
 
 
-SCENES = [(0.0, scene_countdown), (2.0, scene_drop), (4.0, scene_words), (6.0, scene_hand),
-          (8.0, scene_collage), (12.0, scene_logo)]
+SCENES = [(0.0, scene_hook), (DROP, scene_drop), (4.0, scene_words), (6.0, scene_who),
+          (8.0, scene_collage), (LOGO, scene_logo)]
+
+
+def scene_at(c, A, t):
+    fn = [f for t0, f in SCENES if t >= t0][-1]
+    fn(c, A, t)
+
+
+# ----------------------------------------------------------------------------------------------
+# transitions (3 frames either side of the cut)
+HALF = 0.1
+
+
+def whip(a, b, p, axis):
+    if p < 0.5:
+        q, img, sign = ease_in(p / 0.5), a, -1
+    else:
+        q, img, sign = 1 - ease_out((p - 0.5) / 0.5), b, 1
+    d = sign * q * (W if axis == "h" else H) * 0.55
+    M = np.float32([[1, 0, d if axis == "h" else 0], [0, 1, d if axis == "v" else 0]])
+    img = cv2.warpAffine(img, M, (W, H), borderMode=cv2.BORDER_REFLECT)
+    k = int(8 + 150 * q)
+    return cv2.blur(img, (k, 1) if axis == "h" else (1, k))
+
+
+def zoom_blur(img, z, cx=W / 2, cy=H / 2, spread=(1.0, 1.035, 1.07)):
+    acc = np.zeros_like(img)
+    for f in spread:
+        zz = z * f
+        M = np.float32([[zz, 0, W / 2 - zz * cx], [0, zz, H / 2 - zz * cy]])
+        acc += cv2.warpAffine(img, M, (W, H), borderMode=cv2.BORDER_REFLECT)
+    return acc / len(spread)
+
+
+def zoom_through(a, b, p):
+    if p < 0.5:
+        q = ease_in(p / 0.5)
+        return zoom_blur(a, 1 + 2.2 * q)
+    q = 1 - ease_out((p - 0.5) / 0.5)
+    return zoom_blur(b, 1 + 0.5 * q, spread=(1.0, 1.03, 1.06) if q > 0.05 else (1.0,))
+
+
+def render_scene(A, t):
+    c = np.empty((H, W, 3), np.float32)
+    scene_at(c, A, t)
+    for b, axis in WHIPS:
+        if b - HALF <= t < b + HALF:
+            other = np.empty_like(c)
+            if t < b:
+                scene_at(other, A, b)
+                return whip(c, other, (t - b + HALF) / (2 * HALF), axis)
+            scene_at(other, A, b - 1 / FPS)
+            return whip(other, c, (t - b + HALF) / (2 * HALF), axis)
+    for b in ZOOMS:
+        if b - HALF <= t < b + HALF:
+            other = np.empty_like(c)
+            if t < b:
+                scene_at(other, A, b)
+                return zoom_through(c, other, (t - b + HALF) / (2 * HALF))
+            scene_at(other, A, b - 1 / FPS)
+            return zoom_through(other, c, (t - b + HALF) / (2 * HALF))
+    return c
+
 
 # impact effects: (time, strength)
-IMPACTS = ([(0.5, 0.6), (1.0, 0.6), (1.5, 0.6), (2.0, 1.0), (2.5, 0.5), (3.0, 0.5), (3.5, 0.5),
-            (4.0, 0.6), (4.5, 0.6), (5.0, 0.6), (5.5, 1.0), (6.0, 0.5)]
-           + [(7.0 + 0.125 * k, 0.35) for k in range(8)]
-           + [(8.0 + 0.5 * k, 0.45) for k in range(8)] + [(12.0, 1.2), (13.0, 0.35), (15.0, 1.0)])
+IMPACTS = ([(0.5, 0.12), (1.0, 0.15), (1.5, 0.2), (1.75, 0.4), (DROP, 1.3), (2.5, 0.5), (3.0, 0.5), (3.5, 0.5),
+            (4.0, 0.6), (4.5, 0.6), (5.0, 0.6), (5.5, 1.1), (6.0, 0.6), (6.5, 0.6), (7.0, 0.6)]
+           + [(RAPID[0] + 0.125 * k, 0.4) for k in range(4)]
+           + [(t0, 0.35) for t0, *_ in COLLAGE] + [(EXPLODE[0], 0.7)]
+           + [(LOGO, 1.3), (13.0, 0.3), (MINI_HIT, 0.6), (FINAL_HIT, 1.1)])
 
 
 def post(c, A, t, i):
-    # camera: slow push in the collage, punch on the last logo hit
-    zoom = 1.0
-    if 8.0 <= t < 12.0:
-        zoom = 1.0 + 0.12 * ease_in_out((t - 8.0) / 4.0) + 0.05 * ease_in((t - 11.5) / 0.5)
-    elif t >= 15.0:
-        zoom = 1.0 + 0.06 * ease_out((t - 15.0) / 0.3)
+    zoom, cx, cy = 1.0, W / 2, H / 2
+    if MONITOR[0] <= t < LOGO:  # dive into the poster's computer screen
+        p = (t - MONITOR[0]) / (LOGO - MONITOR[0])
+        zoom = math.exp(math.log(11) * ease_in(p) ** 0.9)
+        m = ease_in_out(min(p * 1.6, 1.0))
+        cx = W / 2 + (MONITOR_PT[0] - W / 2) * m
+        cy = H / 2 + (MONITOR_PT[1] - H / 2) * m
+    elif 8.0 <= t < MONITOR[0]:
+        zoom = 1.0 + 0.06 * ease_in_out((t - 8.0) / (MONITOR[0] - 8.0))
+    elif t >= FINAL_HIT:
+        zoom = 1.0 + 0.06 * ease_out((t - FINAL_HIT) / 0.3)
     sx = sy = 0.0
     split = 1.0
     flash = 0.0
@@ -608,18 +852,22 @@ def post(c, A, t, i):
         if 0 <= d < 0.4:
             e = math.exp(-d / 0.09)
             r = np.random.default_rng(int(ti * 1000) + i)
-            sx += r.uniform(-1, 1) * 28 * k * e
-            sy += r.uniform(-1, 1) * 28 * k * e
-            split += 16 * k * math.exp(-d / 0.07)
-            flash = max(flash, 0.45 * k * math.exp(-d / 0.035))
-    if 11.5 <= t < 12.0:  # build-up shake
-        e = ease_in((t - 11.5) / 0.5)
+            sx += r.uniform(-1, 1) * 30 * k * e
+            sy += r.uniform(-1, 1) * 30 * k * e
+            split += 18 * k * math.exp(-d / 0.07)
+            flash = max(flash, 0.5 * k * math.exp(-d / 0.035))
+    if 1.6 <= t < DROP:  # tension before the drop
+        e = ease_in((t - 1.6) / 0.4)
         r = np.random.default_rng(i)
-        sx += r.uniform(-1, 1) * 22 * e
-        sy += r.uniform(-1, 1) * 22 * e
-        split += 10 * e
-    if zoom != 1.0 or sx or sy:
-        M = np.float32([[zoom, 0, (1 - zoom) * W / 2 + sx], [0, zoom, (1 - zoom) * H / 2 + sy]])
+        sx += r.uniform(-1, 1) * 16 * e
+        split += 14 * e
+    if zoom > 1.6:
+        c = zoom_blur(c, zoom, cx, cy, spread=(1.0, 1.05, 1.1))
+    elif zoom != 1.0:
+        M = np.float32([[zoom, 0, W / 2 - zoom * cx], [0, zoom, H / 2 - zoom * cy]])
+        c = cv2.warpAffine(c, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    if sx or sy:
+        M = np.float32([[1, 0, sx], [0, 1, sy]])
         c = cv2.warpAffine(c, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
     k = int(round(split))
     if k > 0:
@@ -627,18 +875,18 @@ def post(c, A, t, i):
         c = cv2.merge([np.roll(b, -k, axis=1), g, np.roll(r_, k, axis=1)])
     if flash > 0:
         c += (255 - c) * flash
-    # TV static: intro flicker, the gap before the drop, the cut into the logo
     st = 0.0
-    if t < 0.5:
-        st = 0.28 + 0.2 * (boil_step(t) % 2)
-    elif 1.875 <= t < 2.0 or 11.93 <= t < 12.0:
-        st = 0.92
-    elif t < 2.0:
-        st = 0.08
+    if any(a <= t < b for a, b in GAPS):
+        st = 0.9
+    elif t < 0.12:
+        st = 0.5 * (1 - t / 0.12)
     if st > 0:
         noise = np.random.default_rng(i + 999).uniform(0, 255, (H // 3, W // 3)).astype(np.float32)
         noise = cv2.resize(noise, (W, H), interpolation=cv2.INTER_NEAREST)[:, :, None]
         c = c * (1 - st) + noise * st
+    if t >= MONITOR[1] - 0.35:  # CRT: scanlines + glow
+        bloom = cv2.GaussianBlur(cv2.resize(np.clip(c - 150, 0, 255), (W // 4, H // 4)), (0, 0), 6)
+        c = c * A.scanlines + cv2.resize(bloom, (W, H)) * 0.6
     c = c * A.vignette + A.grain[boil_step(t) % len(A.grain)][:, :, None]
     if t > LENGTH - 0.25:
         c *= clamp01((LENGTH - t) / 0.25)
@@ -646,10 +894,7 @@ def post(c, A, t, i):
 
 
 def render(A, t, i):
-    c = np.empty((H, W, 3), np.float32)
-    fn = [f for t0, f in SCENES if t >= t0][-1]
-    fn(c, A, t)
-    return post(c, A, t, i)
+    return post(render_scene(A, t), A, t, i)
 
 
 def main():
@@ -658,11 +903,16 @@ def main():
     ap.add_argument("--preview", help="comma-separated seconds: contact sheet PNG instead of a video")
     ap.add_argument("--music", default=MUSIC)
     args = ap.parse_args()
-    A = Assets()
+    if not os.path.exists(args.music):
+        sys.exit(f"missing {args.music}: run music.py first")
+    A = Assets(args.music)
 
     if args.preview:
+        times = [float(x) for x in args.preview.split(",")]
         tiles = []
-        for p in (float(x) for x in args.preview.split(",")):
+        if any(MONITOR[0] <= p < LOGO for p in times):  # the dive needs the collage's monitor position
+            render(A, MONITOR[0] - 1 / FPS, 0)
+        for p in times:
             i = round(p * FPS)
             img = cv2.resize(render(A, i / FPS, i), (W // 3, H // 3), interpolation=cv2.INTER_AREA)
             cv2.putText(img, f"{p:.2f}s", (10, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
@@ -673,8 +923,6 @@ def main():
         print(f"Saved preview {args.out}")
         return
 
-    if not os.path.exists(args.music):
-        sys.exit(f"missing {args.music}: run music.py first")
     enc = subprocess.Popen([
         "ffmpeg", "-v", "error", "-y",
         "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",

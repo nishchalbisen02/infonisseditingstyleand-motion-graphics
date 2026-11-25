@@ -3,27 +3,27 @@
 
   python3 motion-graphics/projects/launch-intro/music.py out.wav
 
-120 BPM, F minor, 8 bars = 16 s. Arrangement is locked to the video's beat grid (intro.py):
-  bar 1  countdown: crackle + riser, three rising stamp hits, a gap before the drop
-  bar 2  drop: kick / clap / hats, distorted 808, bitcrushed stabs
-  bar 3  "LET'S MAKE SOME NOISE": one big hit per word, no hats
-  bar 4  groove, then a snare roll into the collage
-  bar 5-6 full groove; riser + roll at the end of bar 6
-  bar 7  logo: huge impact, then a filtered half-time groove
-  bar 8  groove, final impact on beat 31, tail to 16 s
+120 BPM, F minor, 8 bars = 16 s, locked to timeline.py (shared with intro.py):
+  bar 0  "SOUND ON": the groove heard through a wall (lowpass opening up), riser, 1/8 silence
+  bar 1  drop: kick / clap / hats, distorted 808, bitcrushed stabs + hook; whooshes on the whips
+  bar 2  LET'S / MAKE / SOME / NOISE: one big hit per word
+  bar 3  EDITS / DESIGN / MOTION groove, 16th roll under the photo stutter
+  bar 4-5 collage groove; riser + roll while the camera dives into the monitor; 1/8 silence
+  bar 6  logo: huge impact, half-time groove
+  bar 7  groove, small hit on the bar, final hit on beat 3, tail to 16 s
 """
+import os
 import sys
 
 import numpy as np
 from scipy.io import wavfile
 from scipy.signal import butter, fftconvolve, sosfilt
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from timeline import BEAT, BPM, FINAL_HIT, GAPS, LENGTH, LOGO, MINI_HIT, MONITOR, WHIPS, ZOOMS  # noqa: E402
+
 SR = 48000
-BPM = 120
-BEAT = 60 / BPM
 STEP = BEAT / 4  # 16th note
-BARS = 8
-LENGTH = BARS * 4 * BEAT
 RNG = np.random.default_rng(42)
 
 F2, DB2, AB2, EB2 = 87.31, 69.30, 103.83, 77.78
@@ -128,6 +128,23 @@ def riser(dur):
     return (out * 1.6 + sweep) * (t / dur) ** 2
 
 
+def whoosh(dur):
+    """Noise swell that sweeps up and cuts at the end (peak on the cut)."""
+    n = int(dur * SR)
+    t = t_of(n)
+    noise = RNG.normal(0, 1, n)
+    out = np.zeros(n)
+    zi = None
+    for i in range(0, n, 512):
+        f = 500 * (12 ** (i / n))
+        sos = butter(2, [f, min(f * 2.5, 20000)], btype="bandpass", fs=SR, output="sos")
+        if zi is None:
+            zi = np.zeros((sos.shape[0], 2))
+        out[i:i + 512], zi = sosfilt(sos, noise[i:i + 512], zi=zi)
+    env = (t / dur) ** 2.2 * np.clip((dur - t) / 0.012, 0, 1)
+    return out * env * 2.2
+
+
 def impact(big=True):
     n = int((2.2 if big else 1.0) * SR)
     t = t_of(n)
@@ -157,7 +174,7 @@ def reverb_ir(seconds=1.4, seed=0):
 class Track:
     def __init__(self):
         self.n = int((LENGTH + 2.5) * SR)
-        self.bus = {k: np.zeros(self.n) for k in ("kick", "drums", "bass", "stab", "fx", "send")}
+        self.bus = {k: np.zeros(self.n) for k in ("kick", "drums", "bass", "stab", "fx", "send", "clear")}
 
     def add(self, bus, sound, at, gain=1.0, send=0.0):
         i = int(round(at * SR))
@@ -196,18 +213,13 @@ def arrange():
             for k, s in enumerate((0, 3, 6, 8, 11, 14)):
                 tr.add("stab", blip(notes[(2, 1, 0, 1, 2, 0)[k]] * 2), step(b, s), 0.32, send=0.25)
 
-    # bar 0: countdown
-    tr.add("fx", crackle(2.0), 0, 0.5)
-    tr.add("fx", riser(1.88), 0.0, 0.55)
-    tr.add("fx", impact(False), 0.0, 0.5, send=0.4)
-    for k, f in enumerate((415.30, 466.16, 523.25)):
-        at = (k + 1) * BEAT
-        tr.add("kick", K, at, 0.8)
-        tr.add("drums", C, at, 0.7, send=0.3)
-        tr.add("stab", blip(f), at, 0.8, send=0.3)
+    # bar 0: the bar-1 groove, heard "through a wall" (muffled in mix()), plus a clear riser
+    groove(0)
+    tr.add("clear", riser(1.86), 0.0, 0.5)
+    tr.add("clear", crackle(1.9), 0, 0.35)
 
     # bar 1: drop
-    tr.add("fx", impact(True), bar(1), 0.6, send=0.3)
+    tr.add("fx", impact(True), bar(1), 0.7, send=0.3)
     groove(1)
 
     # bar 2: one hit per word
@@ -220,29 +232,36 @@ def arrange():
         tr.add("stab", stab(CHORDS[chord], 0.3), at, 0.6, send=0.5)
     tr.add("fx", impact(False), bar(2) + 3 * BEAT, 0.8, send=0.5)
 
-    # bar 3: groove then a roll
+    # bar 3: EDITS / DESIGN / MOTION, then a 16th roll under the photo stutter
     groove(3)
-    for s in range(8, 16):
-        tr.add("drums", C, step(3, s), 0.3 + 0.06 * (s - 8))
+    for s in range(12, 16):
+        tr.add("drums", C, step(3, s), 0.5 + 0.1 * (s - 12))
+        tr.add("stab", blip(CHORDS["Ab"][s % 3] * 2), step(3, s), 0.4)
 
-    # bars 4-5: collage
+    # bars 4-5: collage, then a riser + roll as the camera dives into the monitor
     tr.add("fx", impact(False), bar(4), 0.5, send=0.4)
     groove(4)
     groove(5)
-    tr.add("fx", riser(2.0 - 0.06), bar(5), 0.45)
-    for s in range(8, 16):
-        tr.add("drums", C, step(5, s) + STEP / 2, 0.15 + 0.04 * (s - 8))
+    tr.add("clear", riser(MONITOR[1] - MONITOR[0] - 0.125), MONITOR[0], 0.55)
+    for s in range(8, 15):
+        tr.add("drums", C, step(5, s) + STEP / 2, 0.15 + 0.05 * (s - 8))
 
     # bar 6: logo
-    tr.add("fx", impact(True), bar(6), 1.0, send=0.5)
-    tr.add("kick", K, bar(6))
+    tr.add("fx", impact(True), LOGO, 1.0, send=0.5)
+    tr.add("kick", K, LOGO)
     groove(6, stabs=False, halftime=True)
 
-    # bar 7: groove, final hit on beat 31 (bar 7, beat 3)
+    # bar 7: groove, a small hit on the bar, the final hit on beat 3
     groove(7, halftime=True)
-    tr.add("fx", impact(True), bar(7) + 2 * BEAT, 0.9, send=0.6)
-    tr.add("kick", K, bar(7) + 2 * BEAT)
-    tr.add("stab", stab(CHORDS["Fm"], 0.6), bar(7) + 2 * BEAT, 0.7, send=0.7)
+    tr.add("fx", impact(False), MINI_HIT, 0.6, send=0.4)
+    tr.add("fx", impact(True), FINAL_HIT, 0.9, send=0.6)
+    tr.add("kick", K, FINAL_HIT)
+    tr.add("stab", stab(CHORDS["Fm"], 0.6), FINAL_HIT, 0.7, send=0.7)
+
+    # whooshes on every whip / zoom transition (peak right on the cut)
+    for at in [w[0] for w in WHIPS] + ZOOMS:
+        wh = whoosh(0.32)
+        tr.add("clear", wh, at - 0.30, 0.5)
     return tr
 
 
@@ -269,6 +288,27 @@ def mix(tr):
 
     out = np.stack([left, right], axis=1)
     out = filt(out.T, "highpass", 28).T
+
+    # intro heard through a wall: lowpass opening up 220 Hz -> 2.4 kHz, quieter, until the drop gap
+    g0 = int(GAPS[0][0] * SR)
+    block = 512
+    zi = None
+    for i in range(0, g0, block):
+        f = 220 * (11 ** ((i / g0) ** 2))
+        sos = butter(4, f, btype="lowpass", fs=SR, output="sos")
+        if zi is None:
+            zi = np.zeros((sos.shape[0], 2, 2))
+        seg = out[i:min(i + block, g0)].T
+        y = np.empty_like(seg)
+        for ch in range(2):
+            y[ch], zi[:, ch] = sosfilt(sos, seg[ch], zi=zi[:, ch])
+        out[i:min(i + block, g0)] = y.T * (0.38 + 0.27 * i / g0)
+    clear = tr.bus["clear"]
+    out += np.stack([clear, clear], axis=1) * 0.8
+    for a, b in GAPS:  # silence right before the drops
+        i, j = int(a * SR), int(b * SR)
+        ramp = np.clip((np.arange(j - i)) / (0.004 * SR), 0, 1)[::-1]
+        out[i:j] *= ramp[:, None] * 0
     out = np.tanh(out * 0.6) / 0.6  # gentle glue / crunch, keeps the hits punchy
     end = int(LENGTH * SR)
     fade = np.clip((end - np.arange(n)) / (0.35 * SR), 0, 1)  # gentle tail fade to 16 s
