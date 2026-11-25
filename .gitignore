@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+*.log
+
+# ProRes (alpha) renders are large: send them to the owner directly, don't commit.
+*.mov
