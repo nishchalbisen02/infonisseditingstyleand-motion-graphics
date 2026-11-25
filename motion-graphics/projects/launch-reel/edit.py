@@ -7,7 +7,7 @@
 What it does (audio is kept exactly in sync, nothing is retimed):
   - vertical crop that follows the face in each shot
   - punch-in zoom cuts in the speech pauses, plus an impact zoom on the shot change
-  - photo montage (6.6-11.3s): the owner's 6 photos slam in as collage cards with chalk doodles,
+  - photo montage (6.3-11.3s): the owner's 7 photos slam in as collage cards with chalk doodles,
     over the voice, on alternating orange/black plates (photos in ./assets, git-ignored)
   - pull-back on the smoke so the full "Let'smakesomenoise" end card fits the vertical frame
   - light grade (contrast, saturation, vignette), fine film grain, mild sharpening
@@ -48,7 +48,7 @@ ZOOM = [
     (12.48, 13.66, 1.10, 1.13),
     (13.66, 99.0, 1.28, 1.34),
 ]
-MONTAGE_START, MONTAGE_END = 6.6, 11.30  # photo montage over the voice; ends in a speech pause
+MONTAGE_START, MONTAGE_END = 6.3, 11.30  # photo montage over the voice; ends in a speech pause
 IMPACTS = [  # time, duration, starting zoom: a punch on the shot change and when the face comes back
     (CUT, 0.40, 1.30),
     (MONTAGE_END, 0.35, 1.30),
@@ -80,11 +80,13 @@ CARDS = [
     ("greenhat.png", BLACK, 2.5, [("bolt", 935, 235, 12, 1.0), ("star", 150, 1575, 0, 1.0),
                                   ("star", 228, 1650, 0, 0.6)]),
     ("filmstrip.png", ORANGE, -2.0, [("burst", 930, 360, -40, 1.0), ("squiggle", 560, 1470, 2, 1.0)]),
-    ("hand.jpg", BLACK, 3.0, [("star", 935, 230, 0, 1.1), ("bolt", 170, 1570, -12, 0.9)]),
-    ("boxface.png", ORANGE, -2.5, [("burst", 935, 250, -40, 0.9), ("burst", 150, 1560, 135, 1.0)]),
     ("niss-orange.png", BLACK, 2.5, [("bolt", 905, 250, 12, 1.2), ("star", 150, 1480, 0, 1.0),
                                      ("star", 228, 1565, 0, 0.6)]),
+    ("boxface.png", ORANGE, -2.5, [("burst", 935, 250, -40, 0.9), ("burst", 150, 1560, 135, 1.0)]),
+    ("hand.jpg", BLACK, 3.0, [("star", 935, 230, 0, 1.1), ("bolt", 170, 1570, -12, 0.9)]),
+    ("poster.png", ORANGE, -1.5, [("burst", 935, 250, -45, 0.9), ("star", 150, 1585, 0, 1.0)]),
 ]
+CARD_WEIGHTS = {"poster.png": 1.6}  # the poster carries the tagline: give it more screen time
 
 DOODLE_SHAPES = {
     # polylines in local px (y down), drawn in this order
@@ -168,7 +170,7 @@ def build_montage():
         alpha[pad:H - pad, pad:W - pad] = 1
         shadow = cv2.GaussianBlur(np.roll(np.roll(alpha, 20, 0), 10, 1), (0, 0), 18) * 0.55
         cards.append({
-            "rgb": rgb, "alpha": alpha, "shadow": shadow, "tilt": tilt,
+            "name": name, "rgb": rgb, "alpha": alpha, "shadow": shadow, "tilt": tilt,
             "plate": make_plate(plate, 100 + k),
             "doodles": [place_doodle(*d, rng) for d in doodles],
         })
@@ -178,9 +180,15 @@ def build_montage():
 
 def render_montage(t, montage):
     cards = montage["cards"]
-    dur = (MONTAGE_END - MONTAGE_START) / len(cards)
-    k = min(int((t - MONTAGE_START) / dur), len(cards) - 1)
-    u = t - MONTAGE_START - k * dur
+    weights = [CARD_WEIGHTS.get(c["name"], 1.0) for c in cards]
+    unit = (MONTAGE_END - MONTAGE_START) / sum(weights)
+    start = MONTAGE_START
+    for k, w in enumerate(weights):
+        dur = w * unit
+        if t < start + dur or k == len(cards) - 1:
+            break
+        start += dur
+    u = t - start
     c = cards[k]
 
     # slam in (overshoot), settle, then a slow push
