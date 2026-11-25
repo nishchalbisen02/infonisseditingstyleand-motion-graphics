@@ -5,3 +5,6 @@ node_modules/
 # ProRes (alpha) renders are large: send them to the owner directly, don't commit.
 *.mov
 __pycache__/
+
+# Owner photos/footage for edits: the repo is public, never commit them.
+motion-graphics/projects/*/assets/

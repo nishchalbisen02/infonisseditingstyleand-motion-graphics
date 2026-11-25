@@ -7,20 +7,24 @@
 What it does (audio is kept exactly in sync, nothing is retimed):
   - vertical crop that follows the face in each shot
   - punch-in zoom cuts in the speech pauses, plus an impact zoom on the shot change
+  - photo montage (7.0-11.3s): the owner's photos slam in as collage cards with chalk doodles,
+    over the voice, on alternating orange/black plates (photos in ./assets, git-ignored)
   - pull-back on the smoke so the full "Let'smakesomenoise" end card fits the vertical frame
   - light grade (contrast, saturation, vignette), fine film grain, mild sharpening
-  - the "makesamaynoise" handle moved from the 16:9 corner into the vertical frame
+  - Instagram handle (red bar + handwritten text) in the top-left of the vertical frame
   - loudness normalised for Instagram (-14 LUFS)
 
-Needs: ffmpeg, numpy, opencv-python-headless<5
+Needs: ffmpeg, numpy, pillow, opencv-python-headless<5
 """
 import argparse
 import math
+import os
 import subprocess
 import sys
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 SRC_W, SRC_H = 1920, 1080
 OUT_W, OUT_H = 1080, 1920
@@ -30,7 +34,7 @@ CUT = 157 / FPS  # shot change: lamp close-up -> lying-down selfie
 # Face centre (fraction of source width), smoothed keyframes per shot.
 FACE_X = [
     (0.00, 0.385), (1.60, 0.385), (2.20, 0.362), (3.00, 0.400), (3.80, 0.352), (4.40, 0.335), (CUT - 0.01, 0.360),
-    (CUT, 0.520), (7.0, 0.530), (9.0, 0.550), (11.0, 0.540), (13.0, 0.530), (15.0, 0.530),
+    (CUT, 0.520), (7.0, 0.530), (11.0, 0.575), (12.5, 0.570), (13.3, 0.545), (15.0, 0.530),
 ]
 FACE_Y = [(0.0, 0.36), (CUT - 0.01, 0.36), (CUT, 0.45), (15.0, 0.45)]
 
@@ -44,18 +48,173 @@ ZOOM = [
     (12.48, 13.66, 1.10, 1.13),
     (13.66, 99.0, 1.28, 1.34),
 ]
-IMPACT = (CUT, 0.40, 1.30)  # time, duration, starting zoom of the punch on the shot change
+MONTAGE_START, MONTAGE_END = 7.0, 11.30  # photo montage over the voice; ends in a speech pause
+IMPACTS = [  # time, duration, starting zoom: a punch on the shot change and when the face comes back
+    (CUT, 0.40, 1.30),
+    (MONTAGE_END, 0.35, 1.30),
+]
 
 # End card: pull back from the face crop to fit the text block.
 PULL_START, PULL_END = 15.05, 15.75
 TEXT_BOX = (226, 1684, 596, 833)  # x0, x1, y0, y1 of text + underline in the source
 TEXT_WIDTH_OUT = 960              # text width in the reel, px
 
-# Handle watermark: source box, where it goes in the reel, and when it disappears.
-WM_SRC = (70, 330, 62, 118)       # x0, x1, y0, y1 (taken from a dark frame)
-WM_FRAME_T = 8.0
-WM_POS, WM_SCALE = (64, 210), 1.35
+# Instagram handle: text, look, where it sits in the reel, and when it fades out (before the smoke).
+HANDLE = "@letssmakesomenoise"
+HANDLE_FONT = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "fonts", "Mali-Regular.ttf")
+HANDLE_SIZE = 40                  # px
+HANDLE_BAR = (230, 25, 75)        # RGB of the red bar
+WM_POS = (64, 210)
 WM_FADE = (14.20, 14.45)
+
+
+# --- Photo montage -----------------------------------------------------------------------------
+# The owner's photos slam in as collage cards (B-roll over the voice) during the long second shot.
+# They live in ./assets, which is git-ignored because the repo is public: re-upload them per session.
+ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+ORANGE, BLACK = (24, 80, 214), (16, 14, 14)  # BGR plates; orange sampled from the NISS artwork
+CARD_W, CARD_CY, CARD_BORDER = 900, 900, 14
+CARDS = [
+    # file, plate colour, resting tilt (deg), chalk doodles: (kind, x, y, angle deg, size)
+    ("1-topdown.png", ORANGE, -3.0, [("burst", 935, 250, -45, 1.0), ("squiggle", 540, 1590, -3, 1.0)]),
+    ("2-niss-orange.png", BLACK, 2.5, [("bolt", 905, 250, 12, 1.2), ("star", 150, 1480, 0, 1.0),
+                                       ("star", 228, 1565, 0, 0.6)]),
+    ("3-filmstrip.png", ORANGE, -2.0, [("burst", 930, 360, -40, 1.0), ("squiggle", 560, 1470, 2, 1.0)]),
+    ("4-hand.jpg", BLACK, 3.0, [("star", 160, 225, 0, 1.1), ("bolt", 175, 1560, -12, 0.9),
+                                ("star", 925, 1585, 0, 0.9)]),
+    ("5-boxface.png", ORANGE, -2.5, [("burst", 935, 250, -40, 0.9), ("burst", 150, 1560, 135, 1.0)]),
+]
+
+DOODLE_SHAPES = {
+    # polylines in local px (y down), drawn in this order
+    "burst": [[(28 * math.cos(a), 28 * math.sin(a)), (r * math.cos(a), r * math.sin(a))]
+              for a, r in ((-0.56, 96), (0.0, 112), (0.56, 96))],
+    "bolt": [[(-12, -62), (14, -10), (-6, -6), (20, 60)]],
+    "star": [[(-28, 0), (28, 0)], [(0, -28), (0, 28)], [(-11, -11), (11, 11)]],
+    "squiggle": [[(-210, 6), (-178, -9), (-194, 11), (-158, -2), (210, -14)]],  # like the end-card underline
+}
+
+
+def wobble(pts, rng, step=6.0, amp=1.8):
+    """Densify a polyline and add a little hand-drawn wobble."""
+    out = []
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        n = max(int(math.hypot(x1 - x0, y1 - y0) / step), 1)
+        nx, ny = -(y1 - y0), x1 - x0
+        ln = math.hypot(nx, ny) or 1
+        for i in range(n):
+            f = i / n
+            w = amp * math.sin(f * math.pi * 2 + rng.uniform(0, 6.28)) * rng.uniform(0.5, 1)
+            out.append((x0 + (x1 - x0) * f + nx / ln * w, y0 + (y1 - y0) * f + ny / ln * w))
+    out.append(pts[-1])
+    return np.array(out, np.float32)
+
+
+DOODLE_SCALE, DOODLE_THICKNESS = 1.5, 10
+
+
+def place_doodle(kind, x, y, ang, size, rng):
+    size *= DOODLE_SCALE
+    a = math.radians(ang)
+    ca, sa = math.cos(a), math.sin(a)
+    lines = []
+    for line in DOODLE_SHAPES[kind]:
+        pts = [(x + size * (px * ca - py * sa), y + size * (px * sa + py * ca)) for px, py in line]
+        lines.append(wobble(pts, rng))
+    return lines
+
+
+def draw_partial(mask, lines, progress, thickness=DOODLE_THICKNESS):
+    total = sum(float(np.linalg.norm(np.diff(l, axis=0), axis=1).sum()) for l in lines)
+    budget = total * progress
+    for l in lines:
+        seg = np.linalg.norm(np.diff(l, axis=0), axis=1)
+        if budget <= 0:
+            break
+        keep = int(np.searchsorted(np.cumsum(seg), budget)) + 2
+        budget -= float(seg.sum())
+        pts = (l[:keep] * 4).astype(np.int32)  # 2 bits of sub-pixel precision
+        cv2.polylines(mask, [pts], False, 255, thickness, cv2.LINE_AA, shift=2)
+
+
+def make_plate(color, seed):
+    """Flat colour with a faint paper texture."""
+    rng = np.random.default_rng(seed)
+    n = cv2.GaussianBlur(rng.normal(0, 1, (OUT_H // 8, OUT_W // 8)).astype(np.float32), (0, 0), 2.5)
+    n = cv2.resize(n, (OUT_W, OUT_H), interpolation=cv2.INTER_CUBIC)
+    n /= np.abs(n).max() + 1e-6
+    plate = np.empty((OUT_H, OUT_W, 3), np.float32)
+    plate[:] = color
+    return plate * (1 + 0.08 * n[:, :, None])
+
+
+def build_montage():
+    cards = []
+    rng = np.random.default_rng(11)
+    for k, (name, plate, tilt, doodles) in enumerate(CARDS):
+        im = cv2.imread(os.path.join(ASSETS, name), cv2.IMREAD_COLOR)
+        if im is None:
+            print(f"warning: {name} not found in {ASSETS}; skipping the photo montage", file=sys.stderr)
+            return None
+        h = round(im.shape[0] * CARD_W / im.shape[1])
+        im = cv2.resize(im, (CARD_W, h), interpolation=cv2.INTER_AREA if im.shape[1] > CARD_W else cv2.INTER_CUBIC)
+        b, pad = CARD_BORDER, 90
+        H, W = h + 2 * (b + pad), CARD_W + 2 * (b + pad)
+        rgb = np.zeros((H, W, 3), np.float32)
+        alpha = np.zeros((H, W), np.float32)
+        rgb[pad:H - pad, pad:W - pad] = (236, 241, 243)  # off-white sticker border
+        rgb[pad + b:pad + b + h, pad + b:pad + b + CARD_W] = im
+        alpha[pad:H - pad, pad:W - pad] = 1
+        shadow = cv2.GaussianBlur(np.roll(np.roll(alpha, 20, 0), 10, 1), (0, 0), 18) * 0.55
+        cards.append({
+            "rgb": rgb, "alpha": alpha, "shadow": shadow, "tilt": tilt,
+            "plate": make_plate(plate, 100 + k),
+            "doodles": [place_doodle(*d, rng) for d in doodles],
+        })
+    chalk = np.clip(np.random.default_rng(5).uniform(0.55, 1.0, (OUT_H, OUT_W)).astype(np.float32), 0, 1)
+    return {"cards": cards, "chalk": cv2.GaussianBlur(chalk, (0, 0), 0.7)}
+
+
+def render_montage(t, montage):
+    cards = montage["cards"]
+    dur = (MONTAGE_END - MONTAGE_START) / len(cards)
+    k = min(int((t - MONTAGE_START) / dur), len(cards) - 1)
+    u = t - MONTAGE_START - k * dur
+    c = cards[k]
+
+    # slam in (overshoot), settle, then a slow push
+    if u < 0.12:
+        s = 1.32 + (0.97 - 1.32) * ease_out(u / 0.12)
+    elif u < 0.24:
+        s = 0.97 + 0.03 * ease_in_out((u - 0.12) / 0.12)
+    else:
+        s = 1.0 + 0.035 * (u - 0.24) / max(dur - 0.24, 0.01)
+    rot = c["tilt"] + (6 if k % 2 else -6) * (1 - ease_out(u / 0.18))
+    shake = 14 * (1 - ease_out(u / 0.14))
+    dx, dy = shake * math.sin(u * 95), shake * math.cos(u * 70)
+
+    H, W = c["alpha"].shape
+    M = cv2.getRotationMatrix2D((W / 2, H / 2), rot, s)
+    M[0, 2] += OUT_W / 2 + dx - W / 2
+    M[1, 2] += CARD_CY + dy - H / 2
+    size = (OUT_W, OUT_H)
+    out = c["plate"] * (1 - cv2.warpAffine(c["shadow"], M, size, flags=cv2.INTER_LINEAR))[:, :, None]
+    a = cv2.warpAffine(c["alpha"], M, size, flags=cv2.INTER_LINEAR)[:, :, None]
+    out = out * (1 - a) + cv2.warpAffine(c["rgb"], M, size, flags=cv2.INTER_LINEAR) * a
+
+    # chalk doodles draw on, one after another
+    mask = np.zeros((OUT_H, OUT_W), np.uint8)
+    for j, lines in enumerate(c["doodles"]):
+        p = (u - 0.10 - 0.07 * j) / 0.22
+        if p > 0:
+            draw_partial(mask, lines, min(p, 1.0))
+    if mask.any():
+        m = (mask.astype(np.float32) / 255 * montage["chalk"])[:, :, None]
+        out = out * (1 - m) + 246 * m
+
+    if u < 0.10:  # flash on impact
+        out += (255 - out) * 0.35 * (1 - u / 0.10)
+    return out
 
 
 def ease_in_out(x):
@@ -83,9 +242,9 @@ def zoom_at(t):
         if t0 <= t < t1:
             z = z0 + (z1 - z0) * (t - t0) / (min(t1, 15.0) - t0)
             break
-    it, idur, iz = IMPACT
-    if it <= t < it + idur:
-        z = iz + (z - iz) * ease_out((t - it) / idur)
+    for it, idur, iz in IMPACTS:
+        if it <= t < it + idur:
+            z = iz + (z - iz) * ease_out((t - it) / idur)
     return z
 
 
@@ -128,16 +287,33 @@ def edge_feather(width):
     return np.repeat(col[:, None], SRC_W, axis=1)
 
 
-def extract_watermark(frame):
-    x0, x1, y0, y1 = WM_SRC
-    patch = frame[y0:y1, x0:x1].astype(np.float32)
-    patch = np.clip((patch - 40) * 255 / 215, 0, 255)
-    size = (int((x1 - x0) * WM_SCALE), int((y1 - y0) * WM_SCALE))
-    return cv2.resize(patch, size, interpolation=cv2.INTER_CUBIC)
+def render_handle():
+    """Red bar + handle text on black (BGR float), drawn at 4x and scaled down for smooth edges."""
+    k = 4
+    font = ImageFont.truetype(HANDLE_FONT, HANDLE_SIZE * k)
+    x0, y0, x1, y1 = font.getbbox(HANDLE)
+    ascent, descent = font.getmetrics()
+    bar_w, gap, pad = 3 * k, 22 * k, 6 * k
+    w = bar_w + gap + x1 + pad
+    h = ascent + descent + 2 * pad
+    im = Image.new("RGB", (w, h), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    bar_top = pad + int(ascent * 0.28)
+    d.rectangle((0, bar_top, bar_w, pad + ascent + int(descent * 0.2)), fill=HANDLE_BAR)
+    d.text((bar_w + gap, pad), HANDLE, font=font, fill=(242, 242, 242))
+    im = im.resize((w // k, h // k), Image.LANCZOS)
+    patch = np.asarray(im, dtype=np.float32)[:, :, ::-1].copy()
+    # soft shadow under the text so it stays readable over bright hair/skin
+    shadow = cv2.GaussianBlur(patch.max(axis=2) / 255.0, (0, 0), 3.0)
+    shadow = np.clip(shadow * 1.6, 0, 1)[:, :, None] * 0.45
+    return patch, shadow
 
 
-def render_frame(src, t, look, wm):
+def render_frame(src, t, look, wm, montage=None):
     lut, sat, vig, grain = look
+    if montage and MONTAGE_START <= t < MONTAGE_END:
+        out = render_montage(t, montage) * vig + grain[int(t * FPS) % len(grain)][:, :, None]
+        return overlay_handle(out, t, wm)
     s, cx, cy, _ = layout(t)
     M = np.float32([[s, 0, OUT_W / 2 - s * cx], [0, s, OUT_H / 2 - s * cy]])
     out = cv2.warpAffine(src, M, (OUT_W, OUT_H), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_CONSTANT)
@@ -157,14 +333,18 @@ def render_frame(src, t, look, wm):
     hsv[:, :, 1] = cv2.LUT(hsv[:, :, 1], sat)
     out = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR).astype(np.float32) * vig
     out += grain[int(t * FPS) % len(grain)][:, :, None]
+    return overlay_handle(out, t, wm)
 
-    # handle watermark (screen blend)
+
+def overlay_handle(out, t, wm):
+    """Instagram handle, screen-blended over a soft shadow."""
     a = 1 - min(max((t - WM_FADE[0]) / (WM_FADE[1] - WM_FADE[0]), 0), 1)
     if a > 0:
+        patch, shadow = wm
         x, y = WM_POS
-        h, w = wm.shape[:2]
-        roi = out[y:y + h, x:x + w]
-        out[y:y + h, x:x + w] = roi + (255 - roi) * (wm * a / 255.0)
+        h, w = patch.shape[:2]
+        roi = out[y:y + h, x:x + w] * (1 - shadow * a)
+        out[y:y + h, x:x + w] = roi + (255 - roi) * (patch * a / 255.0)
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
@@ -192,7 +372,8 @@ def main():
     args = ap.parse_args()
 
     look = make_grade()
-    wm = None
+    wm = render_handle()
+    montage = build_montage()
     preview = sorted(float(x) for x in args.preview.split(",")) if args.preview else None
     picked = {}
 
@@ -209,12 +390,6 @@ def main():
             "-movflags", "+faststart", "-shortest", args.out,
         ], stdin=subprocess.PIPE)
 
-    # The watermark is taken from a dark frame, so grab that frame first.
-    for i, fr in enumerate(frames(args.source)):
-        if i == int(WM_FRAME_T * FPS):
-            wm = extract_watermark(fr)
-            break
-
     total = 0
     for i, fr in enumerate(frames(args.source)):
         t = i / FPS
@@ -222,9 +397,9 @@ def main():
         if preview:
             for p in preview:
                 if p not in picked and round(p * FPS) == i:
-                    picked[p] = render_frame(fr, t, look, wm)
+                    picked[p] = render_frame(fr, t, look, wm, montage)
             continue
-        enc.stdin.write(render_frame(fr, t, look, wm).tobytes())
+        enc.stdin.write(render_frame(fr, t, look, wm, montage).tobytes())
         if i % 30 == 0:
             print(f"\rframe {i}", end="", flush=True)
 
