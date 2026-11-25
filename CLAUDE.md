@@ -12,6 +12,8 @@ This repo is their workspace for two kinds of work: **meetings** and **motion gr
   (single-owner repo, phone workflow; no PRs unless asked). Unpushed work is lost when the cloud session ends.
 - Ask only when the answer changes the result (e.g. the exact name/text to show). Otherwise use
   sensible defaults and say what you chose.
+- **This repo is public.** Never commit the owner's own footage, photos, voice or unreleased edits
+  (e.g. a launch reel before launch) without asking. Commit the edit scripts; send the media directly.
 
 ## Meetings (`meetings/`)
 
@@ -38,6 +40,15 @@ node motion-graphics/render.js motion-graphics/templates/<name>.html -p key=valu
   ffmpeg (`-vf "select=...,tile=3x2"`) to check the motion, then send the MP4 to the user.
 - Overlays (lower thirds, callouts): if unknown, ask once whether they edit on phone (`--green`) or computer (`--alpha`).
 - Output goes to `motion-graphics/output/`. Commit MP4s under ~50 MB. `.mov` files are git-ignored: send them directly.
+
+### Editing the owner's footage (`motion-graphics/projects/`)
+
+- One folder per edit with a re-runnable script; uploads only live for one session, so the script takes the
+  source path as an argument. Example: `projects/launch-reel/edit.py` (16:9 to 9:16 reel: face-following crop,
+  punch-in zooms in speech pauses, end-card pull-back, grade, grain, handle watermark, -14 LUFS audio).
+- Use `--preview t1,t2,...` to get a contact sheet before the full render.
+- Speech-to-text models can't be downloaded here (Hugging Face is blocked), so captions need the
+  owner to type the words, or the environment's network to allow the model host.
 
 ### Writing a new template
 
