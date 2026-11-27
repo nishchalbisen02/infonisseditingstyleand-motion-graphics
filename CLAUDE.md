@@ -54,6 +54,9 @@ node motion-graphics/render.js motion-graphics/templates/<name>.html -p key=valu
   birefnet-portrait for B&W photos on dark backgrounds; load only one BiRefNet session at a time or the
   container runs out of memory). `music.py` synthesises an original 120 BPM track (no licensed music).
   `intro.py` renders scenes locked to that beat grid. Photos go in `assets/src/` (git-ignored).
+- `projects/show-intro/`: the official 16:9 show opener (concept "MIC CHECK -> OVERLOAD"), see its
+  `TREATMENT.md`. `timeline.py` holds every hit time for both `sound.py` and `intro.py`; edit it, then
+  re-render both. Needs `assets/logo-hires.png` (git-ignored; median-stacked from the original intro's end card).
 
 ### Writing a new template
 
