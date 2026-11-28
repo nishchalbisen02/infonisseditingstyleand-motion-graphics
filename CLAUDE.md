@@ -67,6 +67,14 @@ node motion-graphics/render.js motion-graphics/templates/<name>.html -p key=valu
 - `projects/pastel-jungle/jungle.py`: 9:16 hand-drawn-FX style test (inspired by the school's Frame by
   Frame Handdrawn FX look): painterly teal jungle, particle paint splash that morphs into a pastel-painted
   cutout head hanging from a branch, white splash morphs into the logo, animated on threes (10 fps).
+- `projects/puffy-poster/`: 2D x 3D motion poster (9:16, 8 s) from the owner's reference (pink puffy 3D type,
+  blue grungy wall, white doodles, cutout photo). `puffy.py` inflates the logo's own letterforms into clay
+  with a height field (normals, diffuse, specular, creases from the logo's inner lines) so inflation and
+  light can animate. `poster.py` = video + sound, `--still`, `--layers DIR` (transparent PNG layers).
+  Photo cutout: BiRefNet `birefnet-general` at half res, mask upscaled onto the full-res photo.
+- Canva: the owner has Canva Pro and wants it used. Upload = `create-upload-url` then a raw-bytes POST to
+  www.canva.com (allowed in the environment). That endpoint accepts images, not MP4. Upload layers as
+  separate PNGs so the design stays editable in the Canva app on their phone.
 
 ### Writing a new template
 
