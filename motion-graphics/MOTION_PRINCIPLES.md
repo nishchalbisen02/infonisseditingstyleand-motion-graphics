@@ -129,7 +129,25 @@ Keep the paths simple and clear. Know the difference between a **morph** and a *
 3. **Check with fresh eyes:** look away, work on another scene, then come back to spot mistakes.
 4. **Pose-to-pose** for complex frame-by-frame work: key poses first, in-betweens later.
 
-## 9. Pre-delivery checklist
+## 9. How their work actually looks
+
+Observed from about 114 example GIFs on their course pages (logo, FX, glitch, type, loops, UI),
+studied frame by frame:
+
+- **Logo pieces are short.** The logo is readable by about 0.7–2.5 s, the whole piece runs 3–5 s, and the
+  last ~1–1.5 s is a clean hold, often with one small secondary action (a beam, a blink, a wiggle).
+- **The logo is built from its own primitives:** dots, bars and strokes that are already in the mark.
+  Examples: bars glitch into "LOGO", strokes draw "NEON", one red stroke becomes "deadline" letter by
+  letter, a UFO "character" beams the logo into place.
+- **Reduced palette:** a dark navy or flat background, white plus 1–2 accent colours, flat vector shapes.
+- **Glitch is chunky and rhythmic:** big horizontal slice offsets in bursts, separated by clean frames.
+- **Hand-drawn FX** (liquid, smoke, energy) are flat shapes with one inner shade, animated on 2s or 3s
+  (about 10–12 fps), with paper grain. The rough blue/red construction drawing comes first, clean colour after.
+- **Typography motion is graphic:** letters wipe or split with accent colours sliding through them,
+  on a strong single-colour field.
+- **Delivery format:** most examples run at 24–25 fps; the hand-drawn work is about 10–12 fps.
+
+## 10. Pre-delivery checklist
 
 - [ ] The beat grid / timeline was planned before animating. Nothing is longer than it needs to be.
 - [ ] Tried it ~30% faster. Every ease checked; no element hangs still at the top of an arc.

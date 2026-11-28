@@ -60,6 +60,9 @@ node motion-graphics/render.js motion-graphics/templates/<name>.html -p key=valu
 - `projects/show-intro/`: the official 16:9 show opener (concept "MIC CHECK -> OVERLOAD"), see its
   `TREATMENT.md`. `timeline.py` holds every hit time for both `sound.py` and `intro.py`; edit it, then
   re-render both. Needs `assets/logo-hires.png` (git-ignored; median-stacked from the original intro's end card).
+- `projects/logo-sting/sting.py`: 4 s logo sting / end tag (`--size hd|reel`), the playbook applied
+  (the underline is the character: arc + smear flight, squash, anticipation, 3-frame overlap, overshoot,
+  one accent, clean hold). Reuses show-intro's logo, helpers and synth.
 
 ### Writing a new template
 
