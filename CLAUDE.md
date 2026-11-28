@@ -27,6 +27,9 @@ This repo is their workspace for two kinds of work: **meetings** and **motion gr
 
 ## Motion graphics (`motion-graphics/`)
 
+**Read `motion-graphics/MOTION_PRINCIPLES.md` before any motion job** and run its pre-delivery checklist
+before sending a video (timing, easing, logo rules, transitions, sound, process).
+
 Templates are HTML + CSS animations in `motion-graphics/templates/`, rendered frame by frame to video:
 
 ```bash
