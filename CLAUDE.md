@@ -72,9 +72,17 @@ node motion-graphics/render.js motion-graphics/templates/<name>.html -p key=valu
   with a height field (normals, diffuse, specular, creases from the logo's inner lines) so inflation and
   light can animate. `poster.py` = video + sound, `--still`, `--layers DIR` (transparent PNG layers).
   Photo cutout: BiRefNet `birefnet-general` at half res, mask upscaled onto the full-res photo.
+  v2 uses Canva-made elements in `assets/ready/` (git-ignored): `gen-auto.png` (full blue auto, generated
+  from the owner's photo because rembg/Canva cutouts tore the auto), `gen-person.png` (Canva background
+  remover), `gen-megaphone/boombox/waves.png` (3D props, animated by `draw_props`). Falls back to
+  `person-auto.png` if they are missing. Canva design "LMSN 3D elements" (DAHcLOek0DE) holds them.
 - Canva: the owner has Canva Pro and wants it used. Upload = `create-upload-url` then a raw-bytes POST to
   www.canva.com (allowed in the environment). That endpoint accepts images, not MP4. Upload layers as
   separate PNGs so the design stays editable in the Canva app on their phone.
+  `generate-image` thumbnails are small and their signed URLs can't be resized: to get full res, put each
+  image on its own page of a design and export the pages as transparent PNG (download host
+  export-download.canva.com, also allowed). Remove-background on a photo of a person with a vehicle can
+  delete the vehicle; generate the vehicle instead.
 
 ### Writing a new template
 

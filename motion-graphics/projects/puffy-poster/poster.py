@@ -109,12 +109,10 @@ def arc_pts(cx, cy, r, a0, a1, n=12):
 
 DOODLES = [
     # (start time, draw duration, [polylines], thickness)
-    (1.85, 0.3, [[(40, 300), (150, 255), (60, 330), (175, 300), (70, 380), (170, 360), (95, 425)]], 6),   # zigzag
     (2.0, 0.15, [[(975, 650), (1045, 720)], [(1045, 650), (975, 720)]], 6),                               # X
     (2.15, 0.3, [[(1010, 930), (1040, 990), (1035, 1050), (990, 1100)], [(975, 1072), (988, 1103), (1022, 1090)]], 5),  # arrow
     (2.3, 0.35, [ellipse_pts(190, 1095, 178, 72)], 5),                                                     # bubble
-    (2.2, 0.2, [arc_pts(320, 1440, 40, 150, 210), arc_pts(320, 1440, 75, 145, 215), arc_pts(320, 1440, 112, 140, 220)], 6),  # sound waves
-    (2.45, 0.12, [[(900, 300), (900, 360)], [(870, 330), (930, 330)]], 5),                                 # sparkle
+    (2.2, 0.2, [arc_pts(185, 1690, 120, 235, 305), arc_pts(185, 1690, 155, 238, 302), arc_pts(185, 1690, 190, 241, 299)], 6),  # sound waves
     (2.55, 0.12, [[(110, 700), (110, 745)], [(88, 722), (132, 722)]], 5),                                  # sparkle
 ]
 
@@ -150,15 +148,21 @@ class Assets:
                 content = words[wi].shape[1] * scale
                 self.puffs.append((pf, x + content / 2, cy))
                 x += content + kern
-        im = cv2.imread(os.path.join(HERE, "assets", "ready", "person-auto.png"), cv2.IMREAD_UNCHANGED)
+        im = compose_person_auto() if os.path.exists(asset("gen-auto.png")) else cv2.imread(
+            asset("person-auto.png"), cv2.IMREAD_UNCHANGED)
         if im is None:
-            sys.exit("missing assets/ready/person-auto.png (see README in this folder)")
+            sys.exit("missing assets/ready/gen-auto.png + gen-person.png or person-auto.png (see README)")
         s = PHOTO_H / im.shape[0]
         im = cv2.resize(im, (int(im.shape[1] * s), PHOTO_H), interpolation=cv2.INTER_AREA)
         rgb = im[:, :, :3].astype(np.float32)
         # match the photo to the scene: a touch cooler and more contrast, like it was shot there
         rgb = np.clip((rgb - 128) * 1.06 + 128 + np.array([8, 0, -6], np.float32), 0, 255)
         self.photo = (rgb, im[:, :, 3].astype(np.float32) / 255)
+        self.props = []
+        for name, width, flip in (("waves", 330, False), ("megaphone", 300, True), ("boombox", 300, False)):
+            sp = load_sprite(asset(f"gen-{name}.png"), width, flip)
+            if sp is not None:
+                self.props.append((name, sp))
         self.text = self.text_layer()
         r = np.random.default_rng(9)
         self.grain = [cv2.GaussianBlur(r.normal(0, 6, (H, W)).astype(np.float32), (0, 0), 0.8) for _ in range(6)]
@@ -171,7 +175,7 @@ class Assets:
         total = sum(d.textlength(t, font=f) for t, f in parts)
         x = (W - total) / 2
         for t, f in parts:
-            d.text((x, 128), t, font=f, fill=255)
+            d.text((x, 92), t, font=f, fill=255)
             x += d.textlength(t, font=f)
         hand = font("Mali-Regular.ttf", 29)
         for i, line in enumerate(("sound on karo,", "baaki hum dekh lenge")):
@@ -189,6 +193,108 @@ class Assets:
         region[:, int(420 * bub):] = 0
         return m
 
+
+
+# ---------------------------------------------------------------- Canva-generated elements
+def asset(name):
+    return os.path.join(HERE, "assets", "ready", name)
+
+
+def crop_alpha(im, pad=4):
+    ys, xs = np.where(im[:, :, 3] > 12)
+    return im[max(ys.min() - pad, 0):ys.max() + pad, max(xs.min() - pad, 0):xs.max() + pad]
+
+
+def compose_person_auto():
+    """Canva-generated full auto behind, the owner (cut out by Canva) standing in front of it, like the photo."""
+    auto = crop_alpha(cv2.imread(asset("gen-auto.png"), cv2.IMREAD_UNCHANGED))
+    person = crop_alpha(cv2.imread(asset("gen-person.png"), cv2.IMREAD_UNCHANGED))
+    ah, aw = auto.shape[:2]
+    ph = int(ah * 1.04)
+    person = cv2.resize(person, (int(person.shape[1] * ph / person.shape[0]), ph), interpolation=cv2.INTER_AREA)
+    pw = person.shape[1]
+    cw, chh = max(aw, int(aw * 0.5 + pw * 0.75)) + 20, int(ah * 1.08)
+    canvas = np.zeros((chh, cw, 4), np.float32)
+
+    def paste(img, x, y):
+        a = img[:, :, 3:4].astype(np.float32) / 255
+        roi = canvas[y:y + img.shape[0], x:x + img.shape[1]]
+        roi[:, :, :3] = roi[:, :, :3] * (1 - a) + img[:, :, :3] * a
+        roi[:, :, 3:] = roi[:, :, 3:] * (1 - a) + 255 * a
+
+    paste(auto, 0, 0)
+    # contact shadow of the person on the auto body
+    px, py = int(aw * 0.5 - pw * 0.25), chh - ph
+    sh = np.zeros((chh, cw), np.float32)
+    sh[py:py + ph, px:px + pw] = person[:, :, 3] / 255.0
+    sh = np.roll(cv2.GaussianBlur(sh, (0, 0), 22), -30, 1) * 0.45
+    canvas[:, :, :3] *= (1 - sh[:, :, None])
+    paste(person, px, py)
+    return np.clip(canvas, 0, 255).astype(np.uint8)
+
+
+def load_sprite(path, width, flip=False):
+    im = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if im is None:
+        return None
+    im = crop_alpha(im)
+    h = int(im.shape[0] * width / im.shape[1])
+    im = cv2.resize(im, (width, h), interpolation=cv2.INTER_AREA)
+    if flip:
+        im = im[:, ::-1]
+    return np.ascontiguousarray(im[:, :, :3], np.float32), np.ascontiguousarray(im[:, :, 3], np.float32) / 255
+
+
+PROPS = {
+    # name: (centre x, centre y, appear time, depth, behind the type?, rest rotation)
+    "waves": (185, 300, 1.95, 0.5, True, -6),
+    "megaphone": (915, 292, 2.05, 1.3, False, 12),
+    "boombox": (175, 1775, 2.15, 1.2, False, -4),
+}
+
+
+def draw_props(c, A, t, behind, layers=None):
+    for name, (rgb, a) in A.props:
+        x, y, t0, depth, is_behind, rest = PROPS[name]
+        if is_behind != behind or t < t0:
+            continue
+        u = t - t0
+        s = spring(u, 1.8, 6.5)                                     # pops in with overshoot
+        rot = rest + (1 - min(s, 1.2)) * 25
+        ph = {"waves": 0.0, "megaphone": 2.1, "boombox": 4.2}[name]
+        y += 10 * math.sin(2 * math.pi * t / 2.4 + ph)              # float
+        rot += 4 * math.sin(2 * math.pi * t / 3.1 + ph)
+        sx = sy = 1.0
+        if t >= G0:                                                 # react to the beat
+            b = math.exp(-(((t - G0) % BEAT) / BEAT) * 7)
+            if name == "megaphone":
+                sx = sy = 1 + 0.08 * b
+                x += 8 * b                                          # recoil (it points left)
+            elif name == "boombox":
+                sx, sy = 1 + 0.05 * b, 1 - 0.07 * b
+            else:
+                sx = sy = 1 + 0.05 * b
+        if name == "megaphone" and POKE - 0.1 <= t < POKE + 0.5:    # it blasts when "noise" gets poked
+            z = t - (POKE - 0.1)
+            k = math.exp(-z * 6) * math.cos(z * 2 * math.pi * 3)
+            sx = sy = sx * (1 + 0.25 * k)
+        if t >= HIT:                                                # everything jumps on the final hit
+            z = t - HIT
+            y -= 60 * math.exp(-z * 7) * abs(math.cos(z * 2 * math.pi * 1.5))
+        dx, dy = camera(t, depth)
+        M = cv2.getRotationMatrix2D((a.shape[1] / 2, a.shape[0] / 2), rot, s)
+        M[0, :2] *= sx
+        M[1, :2] *= sy
+        M[0, 2] = x + dx - (M[0, 0] * a.shape[1] / 2 + M[0, 1] * a.shape[0] / 2)
+        M[1, 2] = y + dy - (M[1, 0] * a.shape[1] / 2 + M[1, 1] * a.shape[0] / 2)
+        aw = cv2.warpAffine(a, M, (W, H), flags=cv2.INTER_LINEAR)
+        rw = cv2.warpAffine(rgb, M, (W, H), flags=cv2.INTER_LINEAR)
+        sh = np.roll(np.roll(cv2.GaussianBlur(aw, (0, 0), 12), 22, 0), 14, 1)
+        c *= 1 - (sh * 0.45)[:, :, None]
+        c = c * (1 - aw[:, :, None]) + rw * aw[:, :, None]
+        if layers is not None:
+            layers[f"prop_{name}"] = np.dstack([rw, aw * 255])
+    return c
 
 # ---------------------------------------------------------------- picture
 def word_state(t, k):
@@ -269,6 +375,8 @@ def render(A, f, layers=None):
     if layers is not None:
         layers["background"] = c.copy()
 
+    c = draw_props(c, A, t, behind=True, layers=layers)
+
     # 3D type
     type_rgb = np.zeros((H, W, 3), np.float32)
     type_a = np.zeros((H, W), np.float32)
@@ -330,6 +438,7 @@ def render(A, f, layers=None):
         c = c * (1 - aw[:, :, None]) + rw * aw[:, :, None]
         if layers is not None:
             layers["photo"] = np.dstack([rw, aw * 255])
+    c = draw_props(c, A, t, behind=False, layers=layers)
 
     # doodles + text (top layer)
     ink = np.zeros((H, W), np.float32)
@@ -341,7 +450,7 @@ def render(A, f, layers=None):
     if t >= G0:
         b = ((t - G0) % BEAT) / BEAT
         if b < 0.35:
-            draw_partial(ink, [arc_pts(320, 1440, 150 + 40 * b, 135, 225)], 1, 5, rng)
+            draw_partial(ink, [arc_pts(185, 1690, 225 + 40 * b, 244, 296)], 1, 5, rng)
     # pop lines when "noise" pops and on the final hit
     for t0 in (POKE, HIT):
         z = t - t0
@@ -420,6 +529,9 @@ def build_sound(path):
         add(boing((196, 247, 294, 392)[k]), t0 + 0.22, 1.0, (-0.4, -0.1, 0.1, 0.4)[k], wet=0.25)
         add(plop(), t0 + 0.26, 0.6, wet=0.2)
     add(sfx.whoosh(0.45), PHOTO_T, 0.7, 0.2)
+    for k, (name, (_, _, t0, *_)) in enumerate(PROPS.items()):
+        add(plop(0.14), t0, 0.9, (-0.5, 0.5, -0.4)[k], wet=0.3)
+        add(boing((523, 659, 440)[k], 0.25), t0 + 0.05, 0.5, (-0.5, 0.5, -0.4)[k], wet=0.3)
     add(sfx.kick(2.4), PHOTO_T + 0.45, 0.9)
     add(sfx.crash(1.0), PHOTO_T + 0.45, 0.35, wet=0.3)
     for t0, dur, *_ in DOODLES:
