@@ -62,7 +62,11 @@ node motion-graphics/render.js motion-graphics/templates/<name>.html -p key=valu
   re-render both. Needs `assets/logo-hires.png` (git-ignored; median-stacked from the original intro's end card).
 - `projects/logo-sting/sting.py`: 4 s logo sting / end tag (`--size hd|reel`), the playbook applied
   (the underline is the character: arc + smear flight, squash, anticipation, 3-frame overlap, overshoot,
-  one accent, clean hold). Reuses show-intro's logo, helpers and synth.
+  one accent, clean hold). Reuses show-intro's logo, helpers and synth. Owner feedback: "no fun", too
+  plain and minimal. They respond to rich colour, texture and playful chaos.
+- `projects/pastel-jungle/jungle.py`: 9:16 hand-drawn-FX style test (inspired by the school's Frame by
+  Frame Handdrawn FX look): painterly teal jungle, particle paint splash that morphs into a pastel-painted
+  cutout head hanging from a branch, white splash morphs into the logo, animated on threes (10 fps).
 
 ### Writing a new template
 
